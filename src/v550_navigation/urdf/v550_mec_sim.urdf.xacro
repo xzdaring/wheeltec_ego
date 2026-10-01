@@ -1,0 +1,158 @@
+<?xml version="1.0"?>
+<robot name="v550_mec_sim"
+       xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    引用厂家已有的 V550 麦轮 URDF。
+    因此不需要复制整套网格和关节定义。
+    这个 URDF 内部包含：
+      base_link
+      lf_wheel_link
+      rf_wheel_link
+      lb_wheel_link
+      rb_wheel_link
+      laser
+      camera_link
+  -->
+  <xacro:include
+      filename="$(find wheeltec_robot_urdf)/urdf/V550_mec_robot.urdf"/>
+
+  <!--
+    麦轮平面运动插件。
+    它把整个模型视为理想全向底盘，不单独控制四个轮子的 joint。
+    因此无法模拟麦轮滚子接触和打滑，但适合先验证 Nav2。
+  -->
+  <gazebo>
+    <plugin name="v550_planar_move"
+            filename="libgazebo_ros_planar_move.so">
+
+      <ros>
+        <!-- 接收 Nav2 输出的速度指令 -->
+        <remapping>cmd_vel:=cmd_vel</remapping>
+
+        <!--
+          插件默认发布 odom。
+          为了让仿真和实车使用同一话题名，将其改成 odom_combined。
+        -->
+        <remapping>odom:=odom_combined</remapping>
+      </ros>
+
+      <!-- 插件内部运动更新频率 -->
+      <update_rate>100</update_rate>
+
+      <!-- 里程计发布频率 -->
+      <publish_rate>30</publish_rate>
+
+      <!-- 发布 nav_msgs/Odometry 话题 -->
+      <publish_odom>true</publish_odom>
+
+      <!-- 发布 odom_combined -> base_footprint TF -->
+      <publish_odom_tf>true</publish_odom_tf>
+
+      <!-- 与实车 odom_frame_id 保持一致 -->
+      <odometry_frame>odom_combined</odometry_frame>
+
+      <!-- 与实车 EKF 输出的 base_link_frame 保持一致 -->
+      <robot_base_frame>base_footprint</robot_base_frame>
+
+      <!-- 里程计协方差，仿真中可以先使用较小值 -->
+      <covariance_x>0.001</covariance_x>
+      <covariance_y>0.001</covariance_y>
+      <covariance_yaw>0.005</covariance_yaw>
+    </plugin>
+  </gazebo>
+
+  <!--
+    planar_move 直接设置模型速度。
+    仿真中关闭底盘和麦轮的地面摩擦，避免物理接触抵消角速度。
+    这里模拟的是理想全向底盘，不模拟轮胎打滑。
+  -->
+  <gazebo reference="base_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+    <gravity>false</gravity>
+  </gazebo>
+  <gazebo reference="lf_wheel_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+    <gravity>false</gravity>
+  </gazebo>
+  <gazebo reference="rf_wheel_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+    <gravity>false</gravity>
+  </gazebo>
+  <gazebo reference="lb_wheel_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+    <gravity>false</gravity>
+  </gazebo>
+  <gazebo reference="rb_wheel_link">
+    <mu1>0.0</mu1>
+    <mu2>0.0</mu2>
+    <gravity>false</gravity>
+  </gazebo>
+
+  <!--
+    在 URDF 的 laser link 上增加 Gazebo 2D 射线传感器。
+    Gazebo 根据 reference="laser" 找到已有 laser 坐标系。
+  -->
+  <gazebo reference="laser">
+    <sensor name="v550_lidar" type="ray">
+
+      <!-- 传感器保持工作 -->
+      <always_on>true</always_on>
+
+      <!-- 在 Gazebo 中显示激光射线 -->
+      <visualize>true</visualize>
+
+      <!-- 10 Hz，与常见 2D 雷达相近 -->
+      <update_rate>10</update_rate>
+
+      <ray>
+        <scan>
+            <horizontal>
+                <!--
+                    仿真 M10_P 的近似视场角。
+                    实车后方有遮挡，雷达只能看到前方约 200°，
+                    因此不能再使用完整的 -π 到 +π。
+                -->
+                 <!-- 200°视场角，建议使用固定点数 -->
+                <samples>800</samples>
+                <resolution>1.0</resolution>
+
+                <!-- 前方左侧 100°，约 -1.74533 rad -->
+                <min_angle>-1.7453292519943295</min_angle>
+
+                <!-- 前方右侧 100°，约 +1.74533 rad -->
+                <max_angle>1.7453292519943295</max_angle>
+            </horizontal>
+        </scan>
+
+        <range>
+          <!-- 过滤 0.25 m 以内的机器人自身回波，避免起点被代价地图标记为障碍 -->
+          <min>0.25</min>
+          <max>12.0</max>
+          <resolution>0.01</resolution>
+        </range>
+      </ray>
+
+      <!-- ROS 2 LaserScan 发布插件 -->
+      <plugin name="v550_lidar_controller"
+              filename="libgazebo_ros_ray_sensor.so">
+
+        <ros>
+          <!-- 插件默认输出 ~/out，重映射成 /scan -->
+          <remapping>~/out:=scan</remapping>
+        </ros>
+
+        <!-- 输出 sensor_msgs/LaserScan -->
+        <output_type>sensor_msgs/LaserScan</output_type>
+
+        <!-- LaserScan.header.frame_id = laser -->
+        <frame_name>laser</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>

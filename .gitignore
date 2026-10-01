@@ -1,0 +1,33 @@
+# ROS / CMake generated output (at every directory level)
+build/
+install/
+log/
+devel/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+__pycache__/
+*.py[cod]
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+# Local tooling and recorded data
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+bags/
+*.bag
+*.db3
+*.mcap
+frames.gv
+frames.pdf
+# Local dependency extraction, never commit downloaded binary packages
+.local_deps/
+*.deb

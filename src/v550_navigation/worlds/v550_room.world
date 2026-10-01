@@ -1,0 +1,209 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="v550_room">
+
+    <!-- 增加光束，更容易显示障碍物与阴影 -->
+    <light type="directional" name="sun">
+    <cast_shadows>true</cast_shadows>
+    <pose>0 0 10 0 0 0</pose>
+
+    <diffuse>0.9 0.9 0.9 1.0</diffuse>
+    <specular>0.2 0.2 0.2 1.0</specular>
+
+    <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+    </attenuation>
+
+    <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- 直接定义无限地面，不访问 Gazebo 在线模型库 -->
+    <model name="ground_plane">
+    <static>true</static>
+
+    <link name="link">
+        <collision name="collision">
+        <geometry>
+            <plane>
+            <normal>0 0 1</normal>
+            <size>100 100</size>
+            </plane>
+        </geometry>
+        </collision>
+
+        <visual name="visual">
+        <geometry>
+            <plane>
+            <normal>0 0 1</normal>
+            <size>100 100</size>
+            </plane>
+        </geometry>
+        <material>
+            <!-- 浅灰色地面 -->
+            <ambient>0.4 0.4 0.4 1.0</ambient>
+            <diffuse>0.8 0.8 0.8 1.0</diffuse>
+            <specular>0.1 0.1 0.1 1.0</specular>
+        </material>
+
+        </visual>
+    </link>
+    </model>
+
+    <!-- 北墙 -->
+    <model name="wall_north">
+        <static>true</static>
+        <pose>0 4 0.5 0 0 0</pose>
+
+        <link name="link">
+            <collision name="collision">
+                <geometry>
+                    <box><size>8 0.2 1.0</size></box>
+                </geometry>
+            </collision>   
+            
+            <visual name="visual">
+                <geometry>
+                    <box><size>8 0.2 1.0</size></box>
+                </geometry>
+                <material>
+                      <!-- 蓝色墙体 -->
+                    <ambient>0.1 0.2 0.5 1.0</ambient>
+                    <diffuse>0.2 0.4 0.9 1.0</diffuse>
+                    <specular>0.2 0.2 0.2 1.0</specular>
+                </material>
+            </visual>
+        </link>
+    </model>
+
+    <!-- 南墙 -->
+     <model name="wall_south">
+        <static>true</static>
+        <pose>0 -4 0.5 0 0 0</pose>
+
+        <link name="link">
+            <collision name="collision">
+                <geometry>
+                    <box><size>8 0.2 1.0</size></box>
+                </geometry>
+            </collision>
+
+            <visual name="visual">
+                <geometry>
+                    <box><size>8 0.2 1.0</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.1 0.2 0.5 1.0</ambient>
+                    <diffuse>0.2 0.4 0.9 1.0</diffuse>
+                    <specular>0.2 0.2 0.2 1.0</specular>
+                </material>
+            </visual>
+        </link>
+     </model>
+
+     <!-- 东侧墙 -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>4 0 0.5 0 0 1.5708</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>8 0.2 1.0</size></box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+            <geometry>
+                <box><size>8 0.2 1.0</size></box>
+            </geometry>
+            <material>
+                <ambient>0.1 0.2 0.5 1.0</ambient>
+                <diffuse>0.2 0.4 0.9 1.0</diffuse>
+                <specular>0.2 0.2 0.2 1.0</specular>
+            </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 西侧墙 -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-4 0 0.5 0 0 1.5708</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>8 0.2 1.0</size></box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+            <geometry>
+                <box><size>8 0.2 1.0</size></box>
+            </geometry>
+            <material>
+                <ambient>0.1 0.2 0.5 1.0</ambient>
+                <diffuse>0.2 0.4 0.9 1.0</diffuse>
+                <specular>0.2 0.2 0.2 1.0</specular>
+            </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 中间障碍物 1 -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>1.5 0.8 0.5 0 0 0</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>0.8 0.8 1.0</size></box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+            <geometry>
+                <box><size>0.8 0.8 1.0</size></box>
+            </geometry>
+            <material>
+                <ambient>0.5 0.0 0.0 1.0</ambient>
+                <diffuse>0.9 0.1 0.1 1.0</diffuse>
+                <specular>0.2 0.2 0.2 1.0</specular>
+                <emissive>0.2 0.0 0.0 1.0</emissive>
+            </material>
+        </visual>
+      </link>
+    </model>
+    
+    <!-- 中间障碍物 2 -->
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>-1.2 -1.0 0.5 0 0 0</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>0.6 1.5 1.0</size></box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <geometry>
+            <box><size>0.6 1.5 1.0</size></box>
+          </geometry>
+          <material>
+            <ambient>0.6 0.3 0.0 1.0</ambient>
+            <diffuse>1.0 0.5 0.0 1.0</diffuse>
+            <specular>0.2 0.2 0.2 1.0</specular>
+            <emissive>0.2 0.1 0.0 1.0</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

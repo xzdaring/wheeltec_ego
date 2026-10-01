@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+    <name>v550_navigation</name>
+    <version>0.1.0</version>
+    <description>V550 mecanum online SLAM and Nav2 navigation.</description>
+    <!-- V550 四轮麦克纳姆轮小车在线 SLAM、Nav2 和 Gazebo 仿真配置。 -->
+    <maintainer email="wheeltec@todo.todo">wheeltec</maintainer>
+    <license>Apache-2.0</license>
+
+    <buildtool_depend>ament_cmake</buildtool_depend>
+
+    <!-- ROS 2 launch 和 Python 节点运行依赖 -->    
+    <exec_depend>ament_index_python</exec_depend>
+    <exec_depend>launch</exec_depend>
+    <exec_depend>launch_ros</exec_depend>
+    <exec_depend>rclpy</exec_depend>
+     <!-- 消息类型依赖 -->
+    <exec_depend>geometry_msgs</exec_depend>
+    <exec_depend>sensor_msgs</exec_depend>
+    <exec_depend>nav2_msgs</exec_depend>
+     <!-- Nav2 导航依赖 -->
+    <exec_depend>nav2_bringup</exec_depend>
+     <!-- 在线 SLAM -->
+    <exec_depend>slam_toolbox</exec_depend>
+     <!-- RViz 显示 -->
+    <exec_depend>rviz2</exec_depend>
+    <!-- 机器人模型与关节状态 -->
+    <exec_depend>xacro</exec_depend>
+    <exec_depend>robot_state_publisher</exec_depend>
+    <exec_depend>joint_state_publisher</exec_depend>
+    <!-- Gazebo 仿真依赖 -->
+    <exec_depend>gazebo_ros</exec_depend>
+    <exec_depend>gazebo_plugins</exec_depend>
+    <!-- 直接引用 V550 原始 URDF -->
+    <exec_depend>wheeltec_robot_urdf</exec_depend>
+     <!-- 实车阶段使用厂家底盘启动包 -->
+    <exec_depend>turn_on_wheeltec_robot</exec_depend>
+    <!-- 实车 M10_P 雷达驱动 -->
+    <exec_depend>lslidar_driver</exec_depend>
+    <export>
+        <build_type>ament_cmake</build_type>
+    </export>
+</package>
