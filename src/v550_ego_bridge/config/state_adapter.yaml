@@ -1,0 +1,7 @@
+v550_ego_state_adapter:
+  ros__parameters:
+    use_sim_time: true
+    odom_topic: /odom_combined
+    pose_topic: /current_pose
+    target_frame: map
+    transform_timeout: 0.1
