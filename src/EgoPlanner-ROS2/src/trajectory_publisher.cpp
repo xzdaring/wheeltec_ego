@@ -416,6 +416,12 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         RCLCPP_WARN(this->get_logger(), "EGO planner returned an empty trajectory");
         return;
         }
+
+        std::cout << "planned start x = "
+                  << planned_traj.front().x
+                  << " , start y ="
+                  << planned_traj.front().y
+                  << std::endl;
     }
     // else
     // { 
