@@ -37,8 +37,8 @@ def generate_launch_description():
     start_slam = LaunchConfiguration('start_slam')
     start_nav2 = LaunchConfiguration('start_nav2')
 
-    # 使用 xacro 展开 v550_mec_sim.urdf.xacro
-    # ParameterValue 保证 robot_description 按字符串传给节点
+    # 使用 xacro 命令读取当前唯一的 V550_mec 仿真 URDF。
+    # ParameterValue 保证 robot_description 按字符串传给节点。
     robot_description = ParameterValue(
         Command(['xacro ',urdf]),
         value_type=str,
