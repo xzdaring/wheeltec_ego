@@ -31,10 +31,21 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
         );
         
 
-    goal_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-        "/goal_pose",
-        10,
-        std::bind(&TrajectoryAndObstaclesPublisher::goal_pose_callback, this, std::placeholders::_1)
+    // 感知适配器已经把 /scan 转成 map 坐标系下的 PointCloud2。
+    // SensorDataQoS 与上游保持一致，并优先处理新数据，避免规划器使用积压的旧障碍。
+    ego_obstacles_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/ego_obstacles",
+        rclcpp::SensorDataQoS(),
+        std::bind(&TrajectoryAndObstaclesPublisher::obstacles_callback, this, std::placeholders::_1)
+    );
+
+    // goal_to_path 使用 TRANSIENT_LOCAL 保存最后一条路径；订阅端使用相同持久性，
+    // motion_plan 即使稍晚启动，也能收到最近一次目标。
+    auto path_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+    rviz_global_path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
+        "/ego_global_path",
+        path_qos,
+        std::bind(&TrajectoryAndObstaclesPublisher::global_path_callback, this, std::placeholders::_1)
     );
 
     rviz_point_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
@@ -106,16 +117,6 @@ void TrajectoryAndObstaclesPublisher::init_ego_planner_base()
     );
 }
 
-void TrajectoryAndObstaclesPublisher::add_obstacle_at_position(double x, double y)
-{
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    ObstacleInfo obs;
-    obs.x = x; obs.y = y; obs.z = 0.0;
-    obstacles_.push_back(obs);
-    has_obstacles_ = true;
-    needs_replan_ = true;
-}
-
 void TrajectoryAndObstaclesPublisher::pose_estimate_callback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(data_mutex_);
@@ -142,9 +143,107 @@ void TrajectoryAndObstaclesPublisher::trigger_plan_callback(const std_msgs::msg:
     RCLCPP_INFO(this->get_logger(), "规划触发状态: %s", should_plan_ ? "ON" : "OFF");
 }
 
-void TrajectoryAndObstaclesPublisher::goal_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+void TrajectoryAndObstaclesPublisher::obstacles_callback(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
-    add_obstacle_at_position(msg->pose.position.x, msg->pose.position.y);
+    // 路径、当前位置和栅格地图都按 map 坐标计算。若混入 laser/odom 坐标，
+    // 数值虽然合法，障碍位置却会整体错位，因此宁可拒绝这一帧并明确报警。
+    if (msg->header.frame_id != "map") {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), 2000,
+            "忽略障碍点云：期望 frame_id=map，实际为 '%s'",
+            msg->header.frame_id.c_str());
+        return;
+    }
+
+    std::vector<ObstacleInfo> new_obstacles;
+    new_obstacles.reserve(static_cast<std::size_t>(msg->width) * msg->height);
+
+    try {
+        // PointCloud2 是带字段描述的二进制数据。迭代器会根据字段偏移安全读取 x/y，
+        // 比假定固定内存布局并强制转换指针更可靠。
+        sensor_msgs::PointCloud2ConstIterator<float> x(*msg, "x");
+        sensor_msgs::PointCloud2ConstIterator<float> y(*msg, "y");
+        for (; x != x.end(); ++x, ++y) {
+            // 非有限值不能用于距离和栅格索引，否则可能传播 NaN 或造成越界。
+            if (!std::isfinite(*x) || !std::isfinite(*y)) {
+                continue;
+            }
+
+            ObstacleInfo obstacle;
+            obstacle.x = *x;
+            obstacle.y = *y;
+            obstacle.z = 0.0;  // 当前是二维规划，z 统一置零。
+            new_obstacles.push_back(obstacle);
+        }
+    } catch (const std::runtime_error & error) {
+        // 上游若没提供 x/y 字段，迭代器会抛异常；捕获后节点仍可等待下一帧。
+        RCLCPP_ERROR_THROTTLE(
+            this->get_logger(), *this->get_clock(), 2000,
+            "障碍点云格式错误，必须包含 float32 x/y 字段: %s", error.what());
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        // 雷达障碍是当前观测，应整帧替换而非持续追加，否则消失的障碍会永久残留。
+        obstacles_ = std::move(new_obstacles);
+        has_obstacles_ = !obstacles_.empty();
+        // 环境发生更新后，请求规划循环检查并生成新轨迹。
+        needs_replan_ = true;
+    }
+}
+
+void TrajectoryAndObstaclesPublisher::global_path_callback(
+    const nav_msgs::msg::Path::SharedPtr msg)
+{
+    // 本规划器的当前位置、障碍物和栅格地图都使用 map；混用坐标系会导致错误避障。
+    if (msg->header.frame_id != "map") {
+        RCLCPP_WARN(
+            this->get_logger(), "忽略全局路径：期望 frame_id=map，实际为 '%s'",
+            msg->header.frame_id.c_str());
+        return;
+    }
+
+    // PlannerInterface::makePlan() 明确要求至少三个参考点，提前检查可避免内部失败。
+    if (msg->poses.size() < 3) {
+        RCLCPP_WARN(
+            this->get_logger(), "忽略全局路径：仅有 %zu 个点，EGO 至少需要 3 个点",
+            msg->poses.size());
+        return;
+    }
+
+    std::vector<PathPoint> new_path;
+    new_path.reserve(msg->poses.size());
+    for (const auto & pose : msg->poses) {
+        if (!std::isfinite(pose.pose.position.x) || !std::isfinite(pose.pose.position.y)) {
+            RCLCPP_WARN(this->get_logger(), "忽略全局路径：其中包含非有限坐标");
+            return;
+        }
+
+        PathPoint point{};  // 花括号把未逐项赋值的字段清零，避免未初始化数据进入优化器。
+        point.x = pose.pose.position.x;
+        point.y = pose.pose.position.y;
+        // 该结构没有独立 yaw 字段，现有工程约定暂用 z 保存二维偏航角。
+        point.z = tf2::getYaw(pose.pose.orientation);
+        point.v = 0.0;
+        new_path.push_back(point);
+    }
+
+    const double new_goal_yaw = new_path.back().z;
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        // 新目标必须整体替换旧路径，不能追加，否则机器人会先驶向历史目标。
+        global_plan_traj_ = std::move(new_path);
+        goal_yaw_ = new_goal_yaw;
+        has_goal_yaw_ = true;
+        has_valid_global_path_ = true;
+        needs_replan_ = true;
+    }
+
+    RCLCPP_INFO(
+        this->get_logger(), "收到全局参考路径：%zu 个点，目标朝向 %.3f rad",
+        msg->poses.size(), new_goal_yaw);
 }
 
 void TrajectoryAndObstaclesPublisher::rviz_point_callback(const geometry_msgs::msg::PointStamped::SharedPtr msg)
@@ -329,10 +428,11 @@ void TrajectoryAndObstaclesPublisher::publish_global_path()
         pose.header = visual_path.header;
         pose.pose.position.x = path_point.x;
         pose.pose.position.y = path_point.y;
-        pose.pose.position.z = path_point.z;
+        // PathPoint::z 在本二维工程中保存 yaw，不是高度，因此可视化高度固定为零。
+        pose.pose.position.z = 0.0;
 
         tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, 0.0);
+        q.setRPY(0.0, 0.0, path_point.z);
         pose.pose.orientation.x = q.x();
         pose.pose.orientation.y = q.y();
         pose.pose.orientation.z = q.z();
@@ -443,10 +543,23 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         pose.header = visual_traj.header;
         pose.pose.position.x = planned_traj[i].x;
         pose.pose.position.y = planned_traj[i].y;
-        pose.pose.position.z = planned_traj[i].z;
+        pose.pose.position.z = 0.0;
 
         tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, 0.0);
+        // 局部轨迹中间点朝向路径切线；最后一点保留 RViz 给出的目标朝向。
+        double yaw = goal_yaw_;
+        if (i + 1 < planned_traj.size()) {
+            const double dx = planned_traj[i + 1].x - planned_traj[i].x;
+            const double dy = planned_traj[i + 1].y - planned_traj[i].y;
+            if (std::hypot(dx, dy) > 1e-6) {
+                yaw = std::atan2(dy, dx);
+            }
+        } else if (!has_goal_yaw_ && i > 0) {
+            yaw = std::atan2(
+                planned_traj[i].y - planned_traj[i - 1].y,
+                planned_traj[i].x - planned_traj[i - 1].x);
+        }
+        q.setRPY(0.0, 0.0, yaw);
         pose.pose.orientation.x = q.x();
         pose.pose.orientation.y = q.y();
         pose.pose.orientation.z = q.z();

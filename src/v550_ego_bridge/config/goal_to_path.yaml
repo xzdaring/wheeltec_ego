@@ -1,0 +1,13 @@
+goal_to_path:
+  ros__parameters:
+    current_pose_topic: /current_pose
+    goal_topic: /goal_pose
+    path_topic: /ego_global_path
+    target_frame: map
+
+    # 相邻参考点约 30 cm；EGO 内部还会再次离散，初始阶段无需生成过密路径。
+    path_spacing: 0.30
+
+    # 目标与当前位置小于 5 cm 时不进行平移规划，避免几乎重合的点让优化器退化。
+    min_goal_distance: 0.05
+    transform_timeout: 0.10

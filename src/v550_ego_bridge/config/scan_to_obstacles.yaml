@@ -1,0 +1,18 @@
+scan_to_obstacles:
+  ros__parameters:
+    # Gazebo 和实车雷达只要都发布 /scan，就不需要修改 C++ 代码。
+    scan_topic: /scan
+    obstacles_topic: /ego_obstacles
+
+    # EGO Planner 当前所有路径点和机器人位姿都使用 map 坐标系。
+    target_frame: map
+
+    # 过滤车体反射和太远的点，减小地图计算量；以后应按实测雷达盲区调整。
+    min_range: 0.25
+    max_range: 12.0
+
+    # 每四束激光取一点，先降低规划计算量；障碍边缘漏检时可改为 1 或 2。
+    beam_step: 4
+
+    # 等待采样时刻 TF 的最长秒数，短等待可容忍轻微发布延迟，又不会长期阻塞回调。
+    transform_timeout: 0.10

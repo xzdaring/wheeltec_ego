@@ -59,9 +59,10 @@ private:
     void publish_and_plan();
     
     // 回调函数
-    void rviz_global_path_callback(const nav_msgs::msg::Path::SharedPtr msg);
-    void goal_pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-    void rviz_obstacles_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    // 接收 goal_to_path 生成的全局参考路径。
+    void global_path_callback(const nav_msgs::msg::Path::SharedPtr msg);
+    // 接收感知适配器输出的 map 坐标系障碍点，并替换上一帧环境数据。
+    void obstacles_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void rviz_point_callback(const geometry_msgs::msg::PointStamped::SharedPtr msg);
     void pose_estimate_callback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
     void trigger_plan_callback(const std_msgs::msg::Bool::SharedPtr msg);
@@ -76,7 +77,6 @@ private:
     // 辅助函数
     void generate_straight_path(const geometry_msgs::msg::PoseStamped& start, 
                                const geometry_msgs::msg::PoseStamped& goal);
-    void add_obstacle_at_position(double x, double y);
 
     void discretize_trajectory(const std::vector<PathPoint>& original_trajectory,
                            std::vector<PathPoint>& discrete_trajectory,
@@ -96,8 +96,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obs_local_pub_;
     
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr rviz_global_path_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr rviz_obstacles_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr ego_obstacles_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr rviz_point_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_estimate_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr trigger_plan_sub_;
@@ -138,6 +137,9 @@ private:
     double map_inflate_value_ = 0.5;//0.5;
 
     double theta_ = 0.0;
+    // 保存目标最终朝向；EGO 当前主要优化位置，末端姿态留给后续轨迹控制器使用。
+    double goal_yaw_ = 0.0;
+    bool has_goal_yaw_ = false;
 };
 
 #endif // TRAJECTORY_OBSTACLES_PUBLISHER_H
