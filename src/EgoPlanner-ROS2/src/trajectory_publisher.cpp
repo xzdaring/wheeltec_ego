@@ -5,6 +5,8 @@
  */
 #include "trajectory_obstacles_publisher.h"
 #include <tf2/utils.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <utility>
 #include "geometry_msgs/msg/quaternion.hpp"  // 确保包含四元数消息类型
 
 TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher() 
@@ -202,6 +204,19 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         RCLCPP_WARN(
             this->get_logger(), "忽略全局路径：期望 frame_id=map，实际为 '%s'",
             msg->header.frame_id.c_str());
+        return;
+    }
+
+    // 空路径是 action 取消产生的停止信号，需要清掉旧路径和旧轨迹。
+    if (msg->poses.empty()) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        global_plan_traj_.clear();
+        global_plan_traj_res_.clear();
+        planned_traj.clear();
+        has_valid_global_path_ = false;
+        has_goal_yaw_ = false;
+        needs_replan_ = false;
+        RCLCPP_INFO(this->get_logger(), "收到空全局路径，已取消当前规划目标");
         return;
     }
 

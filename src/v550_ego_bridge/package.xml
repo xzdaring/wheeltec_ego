@@ -10,7 +10,10 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <!-- RViz Nav2 Goal 使用 NavigateToPose action，而不是普通目标话题。 -->
+  <depend>nav2_msgs</depend>
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <!-- LaserScan 输入和 PointCloud2 输出都由 sensor_msgs 定义。 -->
   <depend>sensor_msgs</depend>
   <depend>tf2</depend>

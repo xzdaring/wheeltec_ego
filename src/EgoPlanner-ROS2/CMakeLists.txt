@@ -10,6 +10,8 @@ find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+# geometry_msgs::Quaternion 与 tf2::Quaternion 的转换实现在此包中。
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(Boost REQUIRED)
@@ -43,6 +45,7 @@ ament_target_dependencies(
   geometry_msgs
   std_msgs
   tf2
+  tf2_geometry_msgs
   tf2_ros
   sensor_msgs
   visualization_msgs
@@ -64,4 +67,3 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()
-

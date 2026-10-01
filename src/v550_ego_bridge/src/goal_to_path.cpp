@@ -1,13 +1,18 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/exceptions.h"
+#include "tf2/utils.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -22,6 +27,9 @@
 class GoalToPath : public rclcpp::Node
 {
 public:
+  using NavigateToPose = nav2_msgs::action::NavigateToPose;
+  using GoalHandleNavigateToPose = rclcpp_action::ServerGoalHandle<NavigateToPose>;
+
   GoalToPath()
   : Node("goal_to_path"),
     tf_buffer_(this->get_clock()),
@@ -31,10 +39,14 @@ public:
       "current_pose_topic", "/current_pose");
     goal_topic_ = declare_parameter<std::string>("goal_topic", "/goal_pose");
     path_topic_ = declare_parameter<std::string>("path_topic", "/ego_global_path");
+    navigate_action_ = declare_parameter<std::string>(
+      "navigate_action", "/navigate_to_pose");
     target_frame_ = declare_parameter<std::string>("target_frame", "map");
     path_spacing_ = declare_parameter<double>("path_spacing", 0.30);
     min_goal_distance_ = declare_parameter<double>("min_goal_distance", 0.05);
     transform_timeout_ = declare_parameter<double>("transform_timeout", 0.10);
+    xy_goal_tolerance_ = declare_parameter<double>("xy_goal_tolerance", 0.10);
+    yaw_goal_tolerance_ = declare_parameter<double>("yaw_goal_tolerance", 0.10);
 
     if (path_spacing_ <= 0.0) {
       throw std::invalid_argument("path_spacing 必须大于 0");
@@ -56,9 +68,23 @@ public:
     auto path_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     path_pub_ = create_publisher<nav_msgs::msg::Path>(path_topic_, path_qos);
 
+    // RViz 的 Nav2 Goal 调用 NavigateToPose action，并不会发布 /goal_pose。
+    // 在桥接包提供标准 action server，既兼容 RViz，又不必启动整套 Nav2 BT Navigator。
+    navigate_server_ = rclcpp_action::create_server<NavigateToPose>(
+      this,
+      navigate_action_,
+      std::bind(&GoalToPath::handle_action_goal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&GoalToPath::handle_action_cancel, this, std::placeholders::_1),
+      std::bind(&GoalToPath::handle_action_accepted, this, std::placeholders::_1));
+
+    // action 状态检查放在定时器中，尤其是取消请求必须等 cancel 回调返回后才能
+    // 转入 CANCELED；在 cancel 回调内部直接切换会违反 rcl_action 状态机。
+    action_timer_ = create_wall_timer(
+      std::chrono::milliseconds(100), std::bind(&GoalToPath::update_action_state, this));
+
     RCLCPP_INFO(
-      get_logger(), "目标适配器已启动: %s + %s -> %s",
-      current_pose_topic_.c_str(), goal_topic_.c_str(), path_topic_.c_str());
+      get_logger(), "目标适配器已启动: topic=%s, action=%s -> %s",
+      goal_topic_.c_str(), navigate_action_.c_str(), path_topic_.c_str());
   }
 
 private:
@@ -75,6 +101,9 @@ private:
 
     latest_pose_ = *msg;
     have_current_pose_ = true;
+
+    // action 处于执行状态时，每次位置更新都反馈剩余距离并检查是否到达。
+    update_action_state();
   }
 
   void goal_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -85,9 +114,65 @@ private:
       return;
     }
 
+    generate_and_publish_path(*msg, nullptr);
+  }
+
+  rclcpp_action::GoalResponse handle_action_goal(
+    const rclcpp_action::GoalUUID &,
+    std::shared_ptr<const NavigateToPose::Goal> goal)
+  {
+    if (!have_current_pose_) {
+      RCLCPP_WARN(get_logger(), "拒绝 Nav2 Goal：尚未收到 %s", current_pose_topic_.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (goal->pose.header.frame_id.empty()) {
+      RCLCPP_WARN(get_logger(), "拒绝 Nav2 Goal：目标 frame_id 为空");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse handle_action_cancel(
+    const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
+  {
+    if (active_goal_ != goal_handle) {
+      return rclcpp_action::CancelResponse::REJECT;
+    }
+    // 此处只记录请求；定时器会在回调返回后安全地完成状态转换。
+    cancel_requested_ = true;
+    RCLCPP_INFO(get_logger(), "收到 Nav2 Goal 取消请求");
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handle_action_accepted(const std::shared_ptr<GoalHandleNavigateToPose> goal_handle)
+  {
+    // 新目标到来时终止旧 action，防止 RViz 同时显示两个目标仍在执行。
+    if (active_goal_ && active_goal_->is_active()) {
+      active_goal_->abort(std::make_shared<NavigateToPose::Result>());
+    }
+
     geometry_msgs::msg::PoseStamped goal_in_map;
-    if (!transform_goal(*msg, goal_in_map)) {
+    if (!generate_and_publish_path(goal_handle->get_goal()->pose, &goal_in_map)) {
+      goal_handle->abort(std::make_shared<NavigateToPose::Result>());
       return;
+    }
+
+    active_goal_ = goal_handle;
+    cancel_requested_ = false;
+    action_goal_in_map_ = goal_in_map;
+    action_start_time_ = now();
+  }
+
+  bool generate_and_publish_path(
+    const geometry_msgs::msg::PoseStamped & requested_goal,
+    geometry_msgs::msg::PoseStamped * transformed_goal)
+  {
+    geometry_msgs::msg::PoseStamped goal_in_map;
+    if (!transform_goal(requested_goal, goal_in_map)) {
+      return false;
+    }
+    if (transformed_goal != nullptr) {
+      *transformed_goal = goal_in_map;
     }
 
     const double dx = goal_in_map.pose.position.x - latest_pose_.pose.position.x;
@@ -97,7 +182,7 @@ private:
       RCLCPP_INFO(
         get_logger(), "目标距离当前位置仅 %.3f m，小于阈值 %.3f m，不生成平移路径",
         distance, min_goal_distance_);
-      return;
+      return false;
     }
 
     nav_msgs::msg::Path path;
@@ -134,6 +219,58 @@ private:
       get_logger(), "已生成参考路径: 起点(%.2f, %.2f), 终点(%.2f, %.2f), %zu 个点",
       latest_pose_.pose.position.x, latest_pose_.pose.position.y,
       goal_in_map.pose.position.x, goal_in_map.pose.position.y, path.poses.size());
+    return true;
+  }
+
+  void update_action_state()
+  {
+    if (!active_goal_ || !active_goal_->is_active()) {
+      return;
+    }
+
+    if (cancel_requested_) {
+      // 空路径清除 EGO 中的旧任务，再把 action 正式置为已取消。
+      publish_empty_path();
+      active_goal_->canceled(std::make_shared<NavigateToPose::Result>());
+      active_goal_.reset();
+      cancel_requested_ = false;
+      RCLCPP_INFO(get_logger(), "Nav2 Goal 已取消，旧规划路径已清除");
+      return;
+    }
+
+    const double dx = action_goal_in_map_.pose.position.x - latest_pose_.pose.position.x;
+    const double dy = action_goal_in_map_.pose.position.y - latest_pose_.pose.position.y;
+    const double distance_remaining = std::hypot(dx, dy);
+    const double current_yaw = tf2::getYaw(latest_pose_.pose.orientation);
+    const double goal_yaw = tf2::getYaw(action_goal_in_map_.pose.orientation);
+    // atan2(sin, cos) 把角度差限制到 [-pi, pi]，避免 179° 与 -179° 被误判相差 358°。
+    const double yaw_error = std::atan2(
+      std::sin(goal_yaw - current_yaw), std::cos(goal_yaw - current_yaw));
+
+    auto feedback = std::make_shared<NavigateToPose::Feedback>();
+    feedback->current_pose = latest_pose_;
+    feedback->distance_remaining = static_cast<float>(distance_remaining);
+    const auto elapsed_ns = (now() - action_start_time_).nanoseconds();
+    feedback->navigation_time.sec = static_cast<int32_t>(elapsed_ns / 1000000000LL);
+    feedback->navigation_time.nanosec = static_cast<uint32_t>(elapsed_ns % 1000000000LL);
+    feedback->number_of_recoveries = 0;
+    active_goal_->publish_feedback(feedback);
+
+    if (distance_remaining <= xy_goal_tolerance_ &&
+      std::abs(yaw_error) <= yaw_goal_tolerance_)
+    {
+      active_goal_->succeed(std::make_shared<NavigateToPose::Result>());
+      active_goal_.reset();
+      RCLCPP_INFO(get_logger(), "Nav2 Goal 已到达：位置和朝向均进入容差范围");
+    }
+  }
+
+  void publish_empty_path()
+  {
+    nav_msgs::msg::Path empty_path;
+    empty_path.header.stamp = now();
+    empty_path.header.frame_id = target_frame_;
+    path_pub_->publish(empty_path);
   }
 
   bool transform_goal(
@@ -167,19 +304,28 @@ private:
   std::string current_pose_topic_;
   std::string goal_topic_;
   std::string path_topic_;
+  std::string navigate_action_;
   std::string target_frame_;
   double path_spacing_;
   double min_goal_distance_;
   double transform_timeout_;
+  double xy_goal_tolerance_;
+  double yaw_goal_tolerance_;
 
   bool have_current_pose_{false};
+  bool cancel_requested_{false};
   geometry_msgs::msg::PoseStamped latest_pose_;
+  geometry_msgs::msg::PoseStamped action_goal_in_map_;
+  rclcpp::Time action_start_time_{0, 0, RCL_ROS_TIME};
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp_action::Server<NavigateToPose>::SharedPtr navigate_server_;
+  std::shared_ptr<GoalHandleNavigateToPose> active_goal_;
+  rclcpp::TimerBase::SharedPtr action_timer_;
 };
 
 int main(int argc, char ** argv)

@@ -7,6 +7,7 @@ V550_mec 仿真/实车接口与 Ego Planner 2D 之间的适配包。
 - `state_adapter`：`/odom_combined` + TF -> `/current_pose`
 - `scan_to_obstacles`：`/scan` + TF -> `/ego_obstacles`
 - `goal_to_path`：`/current_pose` + `/goal_pose` -> `/ego_global_path`
+  同时提供 `/navigate_to_pose` action，兼容 RViz 的 **Nav2 Goal** 工具。
 
 两路数据都转换到 `map` 坐标系后再交给 Ego Planner。路径、机器人位置和
 障碍物只有处在同一个坐标系中，距离计算和碰撞检测才有物理意义。
