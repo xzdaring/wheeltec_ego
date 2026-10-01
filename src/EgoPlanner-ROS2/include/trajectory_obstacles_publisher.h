@@ -44,7 +44,6 @@ SOFTWARE.
 
 // Ego Planner相关头文件
 #include "planner_interface.h"
-#include "ego_planner/msg/current_pose.hpp"  // 自定义消息头文件
 
 
 using namespace ego_planner;

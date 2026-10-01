@@ -411,7 +411,11 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
     // if(global_plan_traj_res_.size() > 5)
     {
         ego_planner_->getLocalPlanTrajResults(planned_traj);
-        std::cout << "planned start x =  " << planned_traj[0].x << " , start y =" <<  planned_traj[0].y << std::endl;
+
+        if (planned_traj.empty()) {
+        RCLCPP_WARN(this->get_logger(), "EGO planner returned an empty trajectory");
+        return;
+        }
     }
     // else
     // { 

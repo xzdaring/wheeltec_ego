@@ -329,34 +329,14 @@ namespace ego_planner
     {
         auto info = &local_data_;
 
-        ego_planner::Bspline bspline;
-        bspline.order = 3;
-        bspline.traj_id = info->traj_id_;
-
         Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
-        bspline.pos_pts.reserve(pos_pts.cols());
-
-        for (int i = 0; i < pos_pts.cols(); ++i)
-        {
-            geometry_msgs::Point pt;
-            pt.x = pos_pts(0, i);
-            pt.y = pos_pts(1, i);
-            pt.z = pos_pts(2, i);
-            bspline.pos_pts.push_back(pt);
-        }
-
         Eigen::VectorXd knots = info->position_traj_.getKnot();
-        bspline.knots.reserve(knots.rows());
-
-        for (int i = 0; i < knots.rows(); ++i)
-        {
-            bspline.knots.push_back(knots(i));
-        }
 
         vector<ego_planner::UniformBspline> traj_;
         double traj_duration_;
 
-        ego_planner::UniformBspline pos_traj(pos_pts, bspline.order, 0.1);
+        constexpr int spline_order = 3;
+        ego_planner::UniformBspline pos_traj(pos_pts, spline_order, 0.1);
         pos_traj.setKnot(knots);
         traj_.clear();
         traj_.push_back(pos_traj);

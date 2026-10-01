@@ -8,6 +8,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -32,24 +33,6 @@ add_subdirectory(planner/bspline_opt)
 add_subdirectory(planner/path_searching)
 add_subdirectory(planner/GridMap2D)
 
-find_package(rosidl_default_generators REQUIRED)
-
-message(status ${PROJECT_NAME})
-
-message(STATUS "包根目录：${CMAKE_CURRENT_SOURCE_DIR}")
-message(STATUS "检查msg文件：${CMAKE_CURRENT_SOURCE_DIR}/msg/CurrentPose.msg")
-
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/msg/CurrentPose.msg")
-  message(FATAL_ERROR "❌ msg文件不存在！路径：${CMAKE_CURRENT_SOURCE_DIR}/msg/CurrentPose.msg")
-else()
-  message(STATUS "✅ msg文件存在！")
-endif()
-# 生成自定义消息
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/CurrentPose.msg"
-  DEPENDENCIES std_msgs
-)
-
 
 # 编译节点
 add_executable(motion_plan src/trajectory_publisher.cpp)
@@ -58,12 +41,13 @@ ament_target_dependencies(
   rclcpp
   nav_msgs
   geometry_msgs
+  std_msgs
   tf2
   tf2_ros
   sensor_msgs
   visualization_msgs
 )
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 
 target_link_libraries(
   motion_plan
@@ -72,7 +56,7 @@ target_link_libraries(
   local_map 
   ego_planner_lib  
   ${Boost_LIBRARIES} 
-  "${cpp_typesupport_target}"
+
 )
 # 安装节点
 install(TARGETS

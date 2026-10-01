@@ -13,7 +13,6 @@
 #include <bspline_opt/uniform_bspline.h>
 #include <plan_env/grid_map.h>
 #include <plan_manage/plan_container.hpp>
-#include "Bspline.h"
 #include <chrono>
 
 
