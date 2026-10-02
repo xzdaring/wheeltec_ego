@@ -51,7 +51,7 @@ public:
     current_pose_topic_ = declare_parameter<std::string>(
       "current_pose_topic", "/current_pose");
     goal_topic_ = declare_parameter<std::string>("goal_topic", "/goal_pose");
-    path_topic_ = declare_parameter<std::string>("path_topic", "/ego_global_path");
+    path_topic_ = declare_parameter<std::string>("path_topic", "/ego_reference_request");
     navigate_action_ = declare_parameter<std::string>(
       "navigate_action", "/navigate_to_pose");
     target_frame_ = declare_parameter<std::string>("target_frame", "map");
@@ -231,6 +231,7 @@ private:
       path.poses.push_back(pose);
     }
 
+    // 这里仅发目标请求，global_route检查地图并绕障后才发布可执行参考路径。
     path_pub_->publish(path);
     RCLCPP_INFO(
       get_logger(), "已生成参考路径: 起点(%.2f, %.2f), 终点(%.2f, %.2f), %zu 个点",

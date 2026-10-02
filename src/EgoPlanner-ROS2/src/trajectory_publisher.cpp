@@ -66,6 +66,9 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
         cur_pose_.vx = std::cos(cur_pose_.z)*m->twist.twist.linear.x - std::sin(cur_pose_.z)*m->twist.twist.linear.y;
         cur_pose_.vy = std::sin(cur_pose_.z)*m->twist.twist.linear.x + std::cos(cur_pose_.z)*m->twist.twist.linear.y;
       });
+    // 接收同一安全地图，补上优化器只看当前雷达、看不到后方历史墙面的缺口。
+    safety_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/ego_costmap",
+      rclcpp::QoS(1).transient_local(), [this](nav_msgs::msg::OccupancyGrid::SharedPtr m){ safety_grid_=m; });
     init_ego_planner_base();
 
     // 5Hz 规划与发布循环
@@ -328,6 +331,8 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             tf2::Quaternion q; q.setRPY(0,0,goal_yaw_); pose.pose.orientation=tf2::toMsg(q);
             path.poses.push_back(pose);
         }
+        // 终点姿态分支同样不能跳过碰撞验证。
+        if(!safe_path({cur_pose_,global_plan_traj_.back()})) path.poses.clear();
         local_traj_pub_->publish(path); publish_global_path(); return;
     }
 
@@ -534,6 +539,34 @@ void TrajectoryAndObstaclesPublisher::publish_a_star_path()
 
 }
 
+// 完整路径硬检查，不能只依赖B样条优化的软碰撞代价。
+bool TrajectoryAndObstaclesPublisher::safe_path(const std::vector<PathPoint>& points)
+{
+    if (!safety_grid_ || points.empty()) return false;
+    const auto & m=*safety_grid_; const double res=m.info.resolution;
+    auto cell=[&](double x,double y){return std::pair<int,int>(
+        std::floor((x-m.info.origin.position.x)/res), std::floor((y-m.info.origin.position.y)/res));};
+    auto cost=[&](std::pair<int,int> c){
+        if(c.first<0 || c.second<0 || c.first>=int(m.info.width) || c.second>=int(m.info.height)) return 100;
+        int value=m.data[c.second*m.info.width+c.first]; return value<0?100:value;
+    };
+    auto prev=cell(cur_pose_.x,cur_pose_.y); int last=cost(prev);
+    if(last>=100)return false;
+    PathPoint a=cur_pose_;
+    for(const auto & b:points){
+        int steps=std::max(1,int(std::ceil(std::hypot(b.x-a.x,b.y-a.y)/(res*.4))));
+        for(int i=1;i<=steps;++i){
+            double u=double(i)/steps; auto c=cell(a.x+u*(b.x-a.x),a.y+u*(b.y-a.y)); int next=cost(c);
+            if(next>=100 || next>last)return false; // 余量区只允许净空增大，实体格永不放行。
+            if(c.first!=prev.first && c.second!=prev.second &&
+               (cost({c.first,prev.second})>last || cost({prev.first,c.second})>last))return false;
+            last=next;prev=c;
+        }
+        a=b;
+    }
+    return true;
+}
+
 // 发布Ego Planner规划后的局部轨迹
 void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
 {
@@ -543,6 +576,11 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
     // if(global_plan_traj_res_.size() > 5)
     {
         ego_planner_->getLocalPlanTrajResults(planned_traj);
+        // 样条若穿膨胀边界，只能使用已经验证的绕障折线；两者都无效则清空停车。
+        if (!safe_path(planned_traj)) {
+            // 0.3m重采样可能跨越原折线拐点；回退必须用保留拐点的原始安全参考。
+            planned_traj = safe_path(global_plan_traj_) ? global_plan_traj_ : std::vector<PathPoint>{};
+        }
 
         if (planned_traj.empty()) {
         // 失败也发空消息，否则 RViz 或后续跟踪器会保留旧目标的轨迹。

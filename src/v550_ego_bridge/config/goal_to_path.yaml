@@ -2,7 +2,7 @@ goal_to_path:
   ros__parameters:
     current_pose_topic: /current_pose
     goal_topic: /goal_pose
-    path_topic: /ego_global_path
+    path_topic: /ego_reference_request  # 先交绕障节点；直线请求不能直接驱动车辆。
     # RViz 的 Nav2 Goal 默认连接这个 action 名称。
     navigate_action: /navigate_to_pose
     target_frame: map

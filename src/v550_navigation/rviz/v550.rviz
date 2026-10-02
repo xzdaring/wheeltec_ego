@@ -1,4 +1,4 @@
-# 紫色箭头显示独立于平移切线的车体yaw，便于检查侧移及终点姿态。
+# 安全代价地图是全局、EGO输出验证、控制器共用的边界。
 Panels:
 - Class: rviz_common/Displays
   Help Height: 0
@@ -220,25 +220,6 @@ Visualization Manager:
     Alpha: 1
     Decay Time: 0
     Use Fixed Frame: true
-  - Class: rviz_default_plugins/PointCloud2
-    Name: EGO Inflation (radius 0.5 m)
-    Enabled: true
-    Value: true
-    Topic:
-      Value: /visual_local_obstacles
-      Depth: 5
-      History Policy: Keep Last
-      Durability Policy: Volatile
-      Reliability Policy: Reliable
-    Color Transformer: FlatColor
-    Color: 255; 160; 30
-    Position Transformer: XYZ
-    Style: Flat Squares
-    Size (m): 0.1
-    Size (Pixels): 3
-    Alpha: 0.35
-    Decay Time: 0
-    Use Fixed Frame: true
   - Class: rviz_default_plugins/Path
     Name: V550 SE2 trajectory (pose arrows)
     Enabled: true
@@ -261,6 +242,20 @@ Visualization Manager:
     Head Diameter: 0.04
     Shaft Length: 0.1
     Shaft Diameter: 0.015
+  - Class: rviz_default_plugins/Map
+    Name: Shared safety costmap (0.25 m)
+    Enabled: true
+    Value: true
+    Alpha: 0.6
+    Color Scheme: costmap
+    Draw Behind: false
+    Topic:
+      Value: /ego_costmap
+      Depth: 1
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+    Use Timestamp: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

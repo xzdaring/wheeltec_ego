@@ -10,10 +10,11 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, qos_profile_sensor_data
 from geometry_msgs.msg import Twist, PoseStamped
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, OccupancyGrid
+from grid_safety import Grid
 from sensor_msgs.msg import PointCloud2, JointState
 from sensor_msgs_py import point_cloud2
-from mecanum_model import wrap, body_velocity, wheels, limit, schedule
+from mecanum_model import wrap, body_velocity, wheels, limit, forward_schedule
 
 
 def yaw(p):
@@ -42,6 +43,7 @@ class Follower(Node):
         self.yaw_tol=param('yaw_tolerance',.04)
         if min(self.arm,self.radius,self.speed,self.accel,self.footprint,self.timeout,self.path_timeout,self.xy_tol,self.yaw_tol,self.wmax)<=0:
             raise ValueError('运动学尺寸、限值及超时必须为正')
+        self.grid=None;self.grid_at=0.
         self.pose=None;self.goal=None;self.path=None;self.reference=None;self.cloud=[]
         self.pose_at=self.cloud_at=self.path_at=0.;self.prev=[0.]*4;self.task_id=None
         self.last_tick=time.monotonic();self.last_clock=None;self.clock_advanced_at=self.last_tick
@@ -50,11 +52,15 @@ class Follower(Node):
         # 此话题仅用于查看计算轮速，不冒充 Gazebo 实际关节状态，也不驱动电机。
         self.wheel_pub=self.create_publisher(JointState,'/ego_wheel_reference',10)
         latched=QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(OccupancyGrid,'/ego_costmap',self.on_grid,latched)
         self.create_subscription(Path,'/ego_global_path',self.on_goal,latched)
         self.create_subscription(Path,'/visual_local_trajectory',self.on_path,10)
         self.create_subscription(PoseStamped,'/current_pose',self.on_pose,10)
         self.create_subscription(PointCloud2,'/ego_obstacles',self.on_cloud,qos_profile_sensor_data)
         self.create_timer(.05,self.tick)
+
+    def on_grid(self,m):
+        if m.header.frame_id=='map':self.grid=Grid(m);self.grid_at=time.monotonic()
 
     def on_pose(self,m):
         if m.header.frame_id!='map':return
@@ -72,6 +78,9 @@ class Follower(Node):
         self.cmd.publish(Twist());self.prev=[0.]*4
 
     def on_goal(self,m):
+        # 同一目标的地图重规划不重置控制器速度；换目标或空路径才立即停车。
+        if self.goal is not None and m.poses and stamp(m.header)==self.task_id:
+            self.goal=m.poses[-1].pose;return
         self.stop();self.path=None;self.reference=None
         self.task_id=stamp(m.header)
         self.goal=m.poses[-1].pose if m.poses and m.header.frame_id=='map' else None
@@ -87,12 +96,16 @@ class Follower(Node):
         points=[(p.pose.position.x,p.pose.position.y) for p in m.poses]
         if not all(math.isfinite(x) and math.isfinite(y) for x,y in points):
             self.path=None;self.stop();return
+        # EGO只是优化器，不能把穿膨胀区的数值解当作可执行轨迹。
+        if self.grid is None or not self.grid.safe([(self.pose.position.x,self.pose.position.y)]+points):
+            self.path=None;self.stop();return
         # 局部终点若不是全局终点，不提前强迫车头对齐最终 yaw。
         end=points[-1];dist=math.hypot(end[0]-self.goal.position.x,end[1]-self.goal.position.y)
         total=math.hypot(self.goal.position.x-self.pose.position.x,self.goal.position.y-self.pose.position.y)
         progress=max(0.,min(1.,1-dist/max(total,1e-6)))
         start=yaw(self.pose);target=start+progress*wrap(yaw(self.goal)-start)
-        poses,times=schedule(points,start,target,self.arm,self.speed,self.accel,self.wmax)
+        # 可视化姿态与实际前视控制一致，不显示朝终点yaw倒行的旧姿态方案。
+        poses,times=forward_schedule(points,start,yaw(self.goal),self.arm,self.speed,self.accel,self.wmax,final=dist<.05)
         if not poses:self.path=None;self.stop();return
         self.path=poses
         out=Path();out.header.frame_id='map';out.header.stamp=m.header.stamp
@@ -114,7 +127,7 @@ class Follower(Node):
             self.stop();self.last_clock=clock;return
         self.last_clock=clock
         if (self.goal is None or self.pose is None or self.path is None or
-            now-self.pose_at>self.timeout or now-self.cloud_at>self.timeout or now-self.path_at>self.path_timeout):
+            self.grid is None or now-self.grid_at>self.timeout or now-self.pose_at>self.timeout or now-self.cloud_at>self.timeout or now-self.path_at>self.path_timeout):
             self.stop();return
         x=self.pose.position.x;y=self.pose.position.y;theta=yaw(self.pose)
         distance=math.hypot(self.goal.position.x-x,self.goal.position.y-y)
@@ -126,23 +139,35 @@ class Follower(Node):
         index=nearest;length=0.
         while index+1<len(self.path) and length<.12:
             length+=math.hypot(self.path[index+1][0]-self.path[index][0],self.path[index+1][1]-self.path[index][1]);index+=1
+        # 前视点不能跨过拐角内侧的膨胀格；缩短前视距离而非沿弦线切墙角。
+        while index>nearest and not self.grid.safe([(x,y),self.path[index][:2]]):index-=1
         p=self.path[index];vx,vy=body_velocity(1.2*(p[0]-x),1.2*(p[1]-y),theta)
-        angular=wrap(p[2]-theta)
-        if distance<.10:
-            # 终点位置和姿态独立闭环；不能把“局部路径结束”误判为全局到达。
-            vx,vy=body_velocity(1.2*(self.goal.position.x-x),1.2*(self.goal.position.y-y),theta);angular=error
-        if distance<=self.xy_tol:vx=vy=0.
+        # 前方200度雷达不适合长距离倒车：先转向行驶方向，再平移。
+        # 保留小幅vy修正（麦轮全向能力），不再沿终点yaw倒着走完整条路径。
+        if distance>self.xy_tol:
+            if distance<.10:
+                vx,vy=body_velocity(1.2*(self.goal.position.x-x),1.2*(self.goal.position.y-y),theta)
+                bearing=math.atan2(self.goal.position.y-y,self.goal.position.x-x)
+            else:bearing=math.atan2(p[1]-y,p[0]-x)
+            angular=wrap(bearing-theta)
+            if abs(angular)>.5:vx=vy=0.
+            vx=max(0.,vx)
+        else:
+            vx=vy=0.;angular=error  # 到位置后再单独对齐目标姿态，避免向后追位置。
         wz=max(-self.wmax,min(self.wmax,1.8*angular))
         (vx,vy,wz),w=limit(vx,vy,wz,self.prev,dt,self.arm,self.speed,self.accel)
         # 用包围整车的圆检查短时扫掠，覆盖任意朝向；只检查中心点会漏掉车角碰撞。
         horizon=max(.4,max(abs(v) for v in w)/self.accel+.15)
-        px=x;py=y;heading=theta
+        px=x;py=y;heading=theta;swept=[(x,y)]
         for i in range(11):
             if any((ox-px)**2+(oy-py)**2<self.footprint**2 for ox,oy in self.cloud):
                 self.stop();return
             step=horizon/10
             px+=(math.cos(heading)*vx-math.sin(heading)*vy)*step
             py+=(math.sin(heading)*vx+math.cos(heading)*vy)*step;heading+=wz*step
+            swept.append((px,py))
+        # 与全局规划共用余量退出规则；物理碰撞由上面的包络圆始终硬阻止。
+        if not self.grid.safe(swept):self.stop();return
         self.prev=w;cmd=Twist();cmd.linear.x=vx;cmd.linear.y=vy;cmd.angular.z=wz;self.cmd.publish(cmd)
         js=JointState();js.header.stamp=self.get_clock().now().to_msg()
         js.name=['lf_wheel','rf_wheel','lb_wheel','rb_wheel'];js.velocity=[v/self.radius for v in w];self.wheel_pub.publish(js)

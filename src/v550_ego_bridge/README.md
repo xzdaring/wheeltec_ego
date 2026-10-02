@@ -193,10 +193,10 @@ python3 src/v550_ego_bridge/test/test_gazebo.py
 
 录包请另开终端执行与启动端相同的三条source（包括setup_v550_dds.bash），先
 `ros2 topic list`确认存在/current_pose、/ego_global_path、/ego_trajectory和/cmd_vel，
-再运行`ros2 bag record -a -o /ros_workspace/rosbag_all3`。录完用
-`ros2 bag info /ros_workspace/rosbag_all3`确认这些话题有消息。
+再运行`ros2 bag record -a -o /ros_workspace/rosbag_all4`。录完用
+`ros2 bag info /ros_workspace/rosbag_all4`确认这些话题有消息。
 
-### 最终验收记录
+### 上一版验收记录（本次修复前）
 
 独立底盘闭环：横移位置误差0.02998m、平移加90度朝向误差0.03999rad、
 纯旋转位置不变且朝向误差0.04000rad；取消和雷达失联输出零速度。
@@ -205,3 +205,66 @@ python3 src/v550_ego_bridge/test/test_gazebo.py
 返回NavigateToPose SUCCEEDED，位置误差0.02982m、yaw误差0.00955rad，
 发布15条位姿轨迹，并在到达后输出零速度。测试使用独立Domain95及Gazebo端口，
 结束后已关闭测试实例。上述是此场景验收结果，不代表任意障碍布局均可达。
+
+## rosbag_all3：绕障、前视行驶和膨胀一致性修复
+
+本包确有完整数据：/cmd_vel 4645条，其中556条vx<-0.01m/s；/scan视场
+约[-100°,100°]。原参考路径是起终点直线，原跟踪朝向逐渐对齐最终yaw，
+二者分别解释了穿障参考和倒行。旧激光点云每帧替换，不保留视场外墙面。
+
+现在链路为：目标请求/ego_reference_request -> global_route.py ->
+基于/map和/ego_obstacles的膨胀Dijkstra参考/ego_global_path -> EGO优化 ->
+全段硬碰撞检查 -> 跟踪器再次检查 -> /cmd_vel。EGO数值解不可行时，只可回退
+到同样检查通过的绕障参考折线，不能回退到任意直线。
+
+/ego_costmap是唯一权威执行边界，RViz已添加该显示：100代表实体包络或未知，
+1..99为安全余量，0为可行驶。实体包络0.20m，膨胀总半径0.25m，另考虑障碍
+方格的半对角线；未知格禁止通行，但不把未知当实体墙向自由区膨胀。
+这不保证车体周边所有区域已经观测，首次测试仍需在已知安全的开阔区域启动。规划和控制都不允许进入100格。
+起点若只是进入1..99安全余量区，允许代价单调不增加的路线退出；若已触及
+实体碰撞边界，则停车并输出NO_SAFE_ROUTE，需要重新定位或人工移到安全处。
+
+默认行驶先对准路线方向，保留小幅横移纠偏，vx不指令倒车；位置到达后再对齐
+目标yaw。紫色姿态箭头也采用这一策略。这样不会为了最终朝向而倒着穿行。
+地图、雷达或统一安全地图超时停止；历史墙面由SLAM地图保留，解决后视盲区
+里已知墙体被单帧雷达遗忘的问题。当前地图未知的后方区域仍不允许盲行。
+
+启动命令仍为ros2 launch v550_ego_bridge ego_sim.launch.py（先source统一DDS脚本），
+务必停止旧实例。查看不可行原因：ros2 topic echo /ego_planning_status。
+本次改动覆盖上一节“可保持车头朝向完成整段横移”的默认行为：前视模式优先
+让行驶方向落入雷达视场，麦轮vy仍用于纠偏，没有改成差速底盘。
+
+### 本轮验证与复现（2026-10-02）
+
+- 编译通过：ego_planner、v550_ego_bridge、v550_navigation。
+- 栅格回归：绕墙、封闭通道拒绝、膨胀余量单调退出、float32坐标转换安全通过。
+- 独立底盘绕墙：目标(0.9,0,0)，位置误差0.02396m，yaw误差0.03723rad；
+  测试逐条断言vx不倒车，并独立计算圆形车体到矩形墙距离，确认没有碰撞。
+- 完整Gazebo+SLAM：目标相对起点(+0.30,+0.15)、yaw=0.5，Action返回成功，
+  位置误差0.02959m，yaw误差0.000481rad，到达后零速度。
+
+前置雷达不会观测自身车身区域，因此SLAM起点有时为未知。global_route仅在
+定位新鲜时豁免当前车体内的未知格，不清除实测障碍及其膨胀。未知边界没有
+实体膨胀，所以安全保证是针对已观测障碍；实际试车仍需先确认周边安全。
+
+规划分工：Dijkstra提供绕障参考，EGO尝试平滑局部路径；当优化失败或切角时，
+绿色局部路径可能是验证通过的参考折线，不代表每次都成功生成B样条。
+跟踪器仍使用V550麦轮逆运动学和四轮速度/加速度约束，拐角允许先转向。
+禁止仅凭RViz中的绿色线判断成功：还要看Action结果、位置误差和是否零速停止。
+
+在独立测试终端中（先source ROS、install及setup_v550_dds.bash）：
+
+```bash
+python3 src/v550_ego_bridge/test/test_grid.py
+export ROS_DOMAIN_ID=97
+python3 src/v550_ego_bridge/test/test_wall.py
+export ROS_DOMAIN_ID=96
+python3 src/v550_ego_bridge/test/test_closed_loop.py
+export ROS_DOMAIN_ID=98
+export GAZEBO_MASTER_URI=http://127.0.0.1:11365
+python3 src/v550_ego_bridge/test/test_gazebo.py
+```
+
+这些测试自行启动节点；不要和正常仿真共用Domain或Gazebo master端口。
+已接触实体包络、通路完全封闭或目标位于膨胀区域时，预期结果是停车并报告
+NO_SAFE_ROUTE；不通过缩小膨胀半径强行通行。当前action保持等待，可在RViz取消。

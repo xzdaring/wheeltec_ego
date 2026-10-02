@@ -29,6 +29,7 @@ SOFTWARE.
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
@@ -123,6 +124,9 @@ private:
     // 保存任务标识，跟踪器可拒绝换目标前滞留在DDS中的旧路径。
     builtin_interfaces::msg::Time reference_stamp_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr velocity_sub_;
+    nav_msgs::msg::OccupancyGrid::SharedPtr safety_grid_;
+    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr safety_sub_;
+    bool safe_path(const std::vector<PathPoint>& points);
     bool have_pose_ = false;
     PathPoint cur_pose_{};
 

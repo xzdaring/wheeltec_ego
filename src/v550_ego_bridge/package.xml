@@ -13,6 +13,10 @@
   <!-- RViz Nav2 Goal 使用 NavigateToPose action，而不是普通目标话题。 -->
   <depend>nav2_msgs</depend>
   <!-- 跟踪器读取标准ROS消息并发布底盘速度，不要求新增自定义接口。 -->
+  <!-- 统一安全地图使用欧氏距离变换进行真实米制膨胀。 -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs_py</exec_depend>
   <depend>rclcpp</depend>

@@ -63,3 +63,23 @@ def schedule(points, start_yaw, end_yaw, arm, speed, accel, angular_speed):
     factor=max(factor,math.sqrt(max(abs(x) for x in prev)/(accel*durations[-1]/2)))
     for dt in durations: times.append(times[-1]+factor*dt)
     return poses,times
+
+
+def forward_schedule(points, start_yaw, goal_yaw, arm, speed, accel, angular_speed, final=True):
+    """前视雷达模式：先转向路线，行驶时面向前进方向，到位后再转向目标yaw。"""
+    if len(points)<2:return [],[]
+    poses=[(points[0][0],points[0][1],start_yaw)];times=[0.]
+    def append(p,angle):
+        old=poses[-1]
+        angle=old[2]+wrap(angle-old[2])
+        if math.hypot(p[0]-old[0],p[1]-old[1])<1e-7 and abs(angle-old[2])<1e-7:return
+        seq,t=schedule([(old[0],old[1]),p],old[2],angle,arm,speed,accel,angular_speed)
+        poses.append(seq[-1]);times.append(times[-1]+t[-1])
+    for a,c in zip(points,points[1:]):
+        if math.dist(a,c)<1e-7:continue
+        bearing=math.atan2(c[1]-a[1],c[0]-a[0])
+        append(a,bearing);append(c,bearing)
+    if final:append(points[-1],goal_yaw)
+    # 已到位且yaw一致仍保留有效路径，控制器可正常确认停止。
+    if len(poses)==1:poses.append(poses[0]);times.append(.02)
+    return poses,times

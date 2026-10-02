@@ -11,7 +11,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     bridge = get_package_share_directory("v550_ego_bridge")
     navigation = get_package_share_directory("v550_navigation")
+    # 两层安全半径不同：0.20m包围实体，0.25m额外留安全余量；各节点共用配置。
+    safety = {"collision_radius": 0.20, "inflation_radius": 0.25}
     return LaunchDescription([
+        Node(package="v550_ego_bridge", executable="global_route.py", output="screen",
+             parameters=[safety, {"use_sim_time": True}]),
         # 无界面回归测试与桌面运行共用启动入口，避免验证另一套配置。
         DeclareLaunchArgument("use_gui", default_value="true"),
         DeclareLaunchArgument("use_rviz", default_value="true"),
@@ -26,5 +30,5 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(bridge, "launch", "bridge.launch.py"))),
         Node(package="ego_planner", executable="motion_plan", output="screen",
-             parameters=[{"use_sim_time": True, "inflation_radius": 0.2}]),
+             parameters=[{"use_sim_time": True, "inflation_radius": 0.25}]),
     ])
