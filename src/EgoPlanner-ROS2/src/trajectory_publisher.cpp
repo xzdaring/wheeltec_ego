@@ -60,6 +60,12 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
 
     // 膨胀半径是米，显示与碰撞检查共用同一栅格，避免看见的与规划使用的不一致。
     map_inflate_value_ = declare_parameter<double>("inflation_radius", 0.5);
+    // 里程计twist是车体系；旋转到map后供EGO边界速度使用，保留横向速度。
+    velocity_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odom_combined", 10,
+      [this](nav_msgs::msg::Odometry::SharedPtr m) {
+        cur_pose_.vx = std::cos(cur_pose_.z)*m->twist.twist.linear.x - std::sin(cur_pose_.z)*m->twist.twist.linear.y;
+        cur_pose_.vy = std::sin(cur_pose_.z)*m->twist.twist.linear.x + std::cos(cur_pose_.z)*m->twist.twist.linear.y;
+      });
     init_ego_planner_base();
 
     // 5Hz 规划与发布循环
@@ -205,7 +211,7 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         planned_traj.clear();
         nav_msgs::msg::Path empty;
         empty.header.frame_id = "map";
-        empty.header.stamp = now();
+        empty.header.stamp = reference_stamp_; // 空轨迹也属于当前任务。
         local_traj_pub_->publish(empty);
         has_valid_global_path_ = false;
         has_goal_yaw_ = false;
@@ -243,6 +249,7 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         // 新目标必须整体替换旧路径，不能追加，否则机器人会先驶向历史目标。
+        reference_stamp_ = msg->header.stamp; // 任务身份随局部轨迹传递。
         global_plan_traj_ = std::move(new_path);
         goal_yaw_ = new_goal_yaw;
         has_goal_yaw_ = true;
@@ -310,6 +317,18 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
     if (!has_valid_global_path_ || global_plan_traj_.empty() || !should_plan_) {
         publish_global_path();
         return;
+    }
+
+    // 近终点/纯旋转不能送入退化B样条；发布位置-姿态段给全向跟踪器闭环收敛。
+    if (std::hypot(global_plan_traj_.back().x-cur_pose_.x, global_plan_traj_.back().y-cur_pose_.y)<0.10) {
+        nav_msgs::msg::Path path; path.header.frame_id="map"; path.header.stamp=reference_stamp_;
+        for (const auto & pt : {cur_pose_, global_plan_traj_.back()}) {
+            geometry_msgs::msg::PoseStamped pose; pose.header=path.header;
+            pose.pose.position.x=pt.x; pose.pose.position.y=pt.y;
+            tf2::Quaternion q; q.setRPY(0,0,goal_yaw_); pose.pose.orientation=tf2::toMsg(q);
+            path.poses.push_back(pose);
+        }
+        local_traj_pub_->publish(path); publish_global_path(); return;
     }
 
     if (collisionDetection(planned_traj) || (planned_traj.size() < 10) || needs_replan_) 
@@ -529,7 +548,7 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         // 失败也发空消息，否则 RViz 或后续跟踪器会保留旧目标的轨迹。
         nav_msgs::msg::Path empty;
         empty.header.frame_id = "map";
-        empty.header.stamp = now();
+        empty.header.stamp = reference_stamp_; // 空轨迹也属于当前任务。
         local_traj_pub_->publish(empty);
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
             "EGO 无可用局部轨迹；检查目标是否在膨胀障碍内");
@@ -552,7 +571,7 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
     // if (planned_traj.empty()) return;
 
     nav_msgs::msg::Path visual_traj;
-    visual_traj.header.stamp = this->now();
+    visual_traj.header.stamp = reference_stamp_; // 保持任务ID，跟踪器用接收时间做新鲜度检查。
     visual_traj.header.frame_id = "map";
 
     for (size_t i = 0; i < planned_traj.size(); ++i)
@@ -565,19 +584,11 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         pose.pose.position.z = 0.0;
 
         tf2::Quaternion q;
-        // 局部轨迹中间点朝向路径切线；最后一点保留 RViz 给出的目标朝向。
-        double yaw = goal_yaw_;
-        if (i + 1 < planned_traj.size()) {
-            const double dx = planned_traj[i + 1].x - planned_traj[i].x;
-            const double dy = planned_traj[i + 1].y - planned_traj[i].y;
-            if (std::hypot(dx, dy) > 1e-6) {
-                yaw = std::atan2(dy, dx);
-            }
-        } else if (!has_goal_yaw_ && i > 0) {
-            yaw = std::atan2(
-                planned_traj[i].y - planned_traj[i - 1].y,
-                planned_traj[i].x - planned_traj[i - 1].x);
-        }
+        // 麦轮yaw不受路径切线约束；沿剩余距离平滑趋向最终yaw。
+        const double total = std::hypot(global_plan_traj_.back().x-cur_pose_.x, global_plan_traj_.back().y-cur_pose_.y);
+        const double remain = std::hypot(global_plan_traj_.back().x-planned_traj[i].x, global_plan_traj_.back().y-planned_traj[i].y);
+        const double u = std::clamp(1.0-remain/std::max(total, 1e-6), 0.0, 1.0);
+        double yaw = cur_pose_.z + u*u*(3-2*u)*std::atan2(std::sin(goal_yaw_-cur_pose_.z),std::cos(goal_yaw_-cur_pose_.z));
         q.setRPY(0.0, 0.0, yaw);
         pose.pose.orientation.x = q.x();
         pose.pose.orientation.y = q.y();
@@ -755,6 +766,10 @@ void TrajectoryAndObstaclesPublisher::discretize_trajectory(const std::vector<Pa
         return;
     }
 
+    // 三次B样条底层实际要求至少4点；短距离也细分为至少6段，避免矩阵未构造就访问。
+    double total_length = 0;
+    for (size_t i=1; i<original_trajectory.size(); ++i) total_length += distance(original_trajectory[i-1], original_trajectory[i]);
+    if (total_length > 1e-6) interval = std::min(interval, total_length/6.0);
     discrete_trajectory.clear();
     // 添加轨迹起点
     // discrete_trajectory.push_back(cur_pose_);

@@ -29,6 +29,7 @@ SOFTWARE.
 
 #include "rclcpp/rclcpp.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
@@ -119,6 +120,9 @@ private:
     std::vector<PathPoint> planned_traj;
     std::vector<PathPoint> global_plan_traj_res_;
 
+    // 保存任务标识，跟踪器可拒绝换目标前滞留在DDS中的旧路径。
+    builtin_interfaces::msg::Time reference_stamp_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr velocity_sub_;
     bool have_pose_ = false;
     PathPoint cur_pose_{};
 

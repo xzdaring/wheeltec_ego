@@ -1,0 +1,16 @@
+trajectory_follower:
+  ros__parameters:
+    # URDF 四轮轮心间距/2；轮半径为STL包络估计，实车有效半径需要标定。
+    half_length: 0.0788
+    half_width: 0.09829
+    wheel_radius: 0.03717
+    # 以下是本项目保守仿真限值，不能冒充厂家电机额定指标。
+    wheel_surface_speed: 0.30
+    wheel_surface_acceleration: 0.40
+    max_yaw_rate: 0.60
+    # 包络车体及四轮，任何yaw下均做保守碰撞检查。
+    collision_radius: 0.20
+    data_timeout: 0.8
+    path_timeout: 1.5
+    xy_tolerance: 0.03
+    yaw_tolerance: 0.04

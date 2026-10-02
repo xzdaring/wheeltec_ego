@@ -127,3 +127,81 @@ RViz 固定坐标系为 map。Nav2 Goal 一次拖拽指定位置和朝向；Publ
 仍使用 TF。这里没有把目标加入障碍列表。参考直线不保证绕过封闭墙体；不可行的
 目标不能保证产生局部轨迹。尚未实现轨迹到 /cmd_vel 的跟踪控制，本入口用于
 规划与可视化，不能据此声称小车已自动到达目标。
+
+## 2026-10-02 V550 麦轮位姿轨迹与闭环跟踪
+
+rosbag_all2 只有 /rosout 的6条录包器日志及空的 /events/write_split，没有轨迹、
+定位、激光或速度消息。这次定位问题以当前源码和新的隔离闭环试验为依据。
+
+数据链：Nav2 Goal -> goal_to_path -> /ego_global_path -> EGO二维位置优化
+-> /visual_local_trajectory -> trajectory_follower.py 中的SE(2)运动学适配
+-> /ego_trajectory（紫色朝向箭头、每个位姿带计划时间）-> /cmd_vel -> Gazebo。
+
+EGO优化位置曲线，姿态适配层按当前位置和最终yaw的最短角差平滑生成车体朝向，
+使用四轮速度/离散加速度约束安排参考时间。控制器采用几何前视和位姿反馈，
+不要求严格按时间表到点，最终输出再次经过四轮速度和加速度限幅。
+这不是把现有B样条优化器改造成完整SE(2)非线性动力学优化器。
+
+对于45度X型麦轮，轮序LF/RF/LB/RB，车体系x前、y左、yaw逆时针，轮周速度：
+
+```
+u_lf = vx - vy - (L+W)*wz
+u_rf = vx + vy + (L+W)*wz
+u_lb = vx + vy - (L+W)*wz
+u_rb = vx - vy + (L+W)*wz
+轮角速度 = u / r
+```
+
+L=0.0788 m、W=0.09829 m 取自URDF轮心间距的一半；r≈0.03717 m 来自STL
+轮胎外形。有效滚动半径与电机额定参数尚未在实车标定。config/mecanum.yaml
+中的0.30 m/s轮周速度、0.40 m/s²轮周加速度和0.60 rad/s角速度是保守仿真值。
+跟踪器保留vy，可不改变车头朝向横移；近终点分别闭环控制位置和姿态，允许纯旋转。
+旧代码的单位起始速度/加速度已去掉，起始平移速度由里程计转换到map提供。
+
+碰撞采用半径0.20m的整车包络圆，不因转向漏检车角；短时预测碰撞、定位/雷达
+超时、局部路径超时、取消或规划失败均停车。正常运动限制轮加速度，紧急零速
+不经过缓慢减速。任务stamp过滤旧目标路径，正常退出先发零速度。
+这是运动学仿真，现有gazebo_ros_planar_move仍驱动整车，四轮为固定关节；没有
+模拟麦轮滚子接触或打滑。/ego_wheel_reference仅显示计算轮速，不冒充实际编码器。
+
+先停止旧启动实例，避免重复 /cmd_vel 发布者。启动命令不变：
+
+```bash
+cd /ros_workspace/wheeltec_sim/wheeltec_nav-main
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+source src/v550_ego_bridge/scripts/setup_v550_dds.bash
+ros2 launch v550_ego_bridge ego_sim.launch.py
+```
+
+本入口现在自动启动跟踪器，点击可行目标后仿真车会实际运动。Nav2保持关闭，
+不要同时启动其他速度控制器。选择距障碍足够远的短目标，先验证横移，再验证
+终点朝向；RViz紫色箭头是车体朝向，绿色是EGO位置曲线，二者无需方向相同。
+
+可复现测试（使用独立Domain，切勿与实车或另一仿真共用）：
+
+```bash
+python3 src/v550_ego_bridge/test/test_model.py
+# 在新的测试终端中加载上面的环境后覆盖Domain：
+export ROS_DOMAIN_ID=94
+python3 src/v550_ego_bridge/test/test_closed_loop.py
+# 真正Gazebo测试使用独立master端口，脚本启动自己的无界面实例并清理：
+export ROS_DOMAIN_ID=95
+export GAZEBO_MASTER_URI=http://127.0.0.1:11365
+python3 src/v550_ego_bridge/test/test_gazebo.py
+```
+
+录包请另开终端执行与启动端相同的三条source（包括setup_v550_dds.bash），先
+`ros2 topic list`确认存在/current_pose、/ego_global_path、/ego_trajectory和/cmd_vel，
+再运行`ros2 bag record -a -o /ros_workspace/rosbag_all3`。录完用
+`ros2 bag info /ros_workspace/rosbag_all3`确认这些话题有消息。
+
+### 最终验收记录
+
+独立底盘闭环：横移位置误差0.02998m、平移加90度朝向误差0.03999rad、
+纯旋转位置不变且朝向误差0.04000rad；取消和雷达失联输出零速度。
+四轮轮周速度峰值0.30m/s，横向速度峰值约0.188m/s。
+真实Gazebo无界面入口测试：目标相对起点(+0.30m,+0.15m)、yaw=0.5rad，
+返回NavigateToPose SUCCEEDED，位置误差0.02982m、yaw误差0.00955rad，
+发布15条位姿轨迹，并在到达后输出零速度。测试使用独立Domain95及Gazebo端口，
+结束后已关闭测试实例。上述是此场景验收结果，不代表任意障碍布局均可达。

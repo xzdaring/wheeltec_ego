@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <chrono>
+#include <csignal>
+#include <thread>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -31,6 +33,16 @@ public:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using GoalHandleNavigateToPose = rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
+  // 正常退出先终结action和清空路径；保留DDS上下文，跟踪器才能收到停车事件。
+  void stop_goals() {
+    publish_empty_path();
+    if (active_goal_ && active_goal_->is_active()) {
+      if (active_goal_->is_canceling()) active_goal_->canceled(std::make_shared<NavigateToPose::Result>());
+      else active_goal_->abort(std::make_shared<NavigateToPose::Result>());
+    }
+    active_goal_.reset();
+  }
+
   GoalToPath()
   : Node("goal_to_path"),
     tf_buffer_(this->get_clock()),
@@ -44,16 +56,13 @@ public:
       "navigate_action", "/navigate_to_pose");
     target_frame_ = declare_parameter<std::string>("target_frame", "map");
     path_spacing_ = declare_parameter<double>("path_spacing", 0.30);
-    min_goal_distance_ = declare_parameter<double>("min_goal_distance", 0.05);
+    // 纯旋转目标合法，因此不再设置最小平移距离。
     transform_timeout_ = declare_parameter<double>("transform_timeout", 0.10);
-    xy_goal_tolerance_ = declare_parameter<double>("xy_goal_tolerance", 0.10);
-    yaw_goal_tolerance_ = declare_parameter<double>("yaw_goal_tolerance", 0.10);
+    xy_goal_tolerance_ = declare_parameter<double>("xy_goal_tolerance", 0.03);
+    yaw_goal_tolerance_ = declare_parameter<double>("yaw_goal_tolerance", 0.04);
 
     if (path_spacing_ <= 0.0) {
       throw std::invalid_argument("path_spacing 必须大于 0");
-    }
-    if (min_goal_distance_ < 0.0) {
-      throw std::invalid_argument("min_goal_distance 不能小于 0");
     }
     transform_timeout_ = std::max(0.0, transform_timeout_);
 
@@ -124,6 +133,10 @@ private:
       return;
     }
 
+    // 普通目标替换 action 任务，避免旧 action 在新目标期间误报成功。
+    if (active_goal_ && active_goal_->is_active()) active_goal_->abort(std::make_shared<NavigateToPose::Result>());
+    active_goal_.reset();
+    publish_empty_path();
     generate_and_publish_path(*msg, nullptr);
   }
 
@@ -159,6 +172,9 @@ private:
       active_goal_->abort(std::make_shared<NavigateToPose::Result>());
     }
 
+    // 新任务开始先清旧参考，跟踪器立即零速，等待新目标对应的局部轨迹。
+    active_goal_.reset();
+    publish_empty_path();
     geometry_msgs::msg::PoseStamped goal_in_map;
     if (!generate_and_publish_path(goal_handle->get_goal()->pose, &goal_in_map)) {
       goal_handle->abort(std::make_shared<NavigateToPose::Result>());
@@ -186,12 +202,7 @@ private:
     const double dx = goal_in_map.pose.position.x - latest_pose_.pose.position.x;
     const double dy = goal_in_map.pose.position.y - latest_pose_.pose.position.y;
     const double distance = std::hypot(dx, dy);
-    if (distance < min_goal_distance_) {
-      RCLCPP_INFO(
-        get_logger(), "目标距离当前位置仅 %.3f m，小于阈值 %.3f m，不生成平移路径",
-        distance, min_goal_distance_);
-      return false;
-    }
+    // 麦轮可以原地旋转；零平移仍发布目标，不能按距离把姿态任务拒绝掉。
 
     nav_msgs::msg::Path path;
     path.header.stamp = now();
@@ -199,9 +210,7 @@ private:
 
     // 至少分成两段，从而产生三个路径点。EGO 优化器要求输入点数不少于 3。
     const int segment_count = std::max(2, static_cast<int>(std::ceil(distance / path_spacing_)));
-    const double travel_yaw = std::atan2(dy, dx);
-    tf2::Quaternion travel_orientation;
-    travel_orientation.setRPY(0.0, 0.0, travel_yaw);
+    // yaw由起始姿态和目标姿态插值，不由直线方向决定。
 
     path.poses.reserve(static_cast<std::size_t>(segment_count + 1));
     for (int index = 0; index <= segment_count; ++index) {
@@ -212,13 +221,13 @@ private:
       pose.pose.position.y = latest_pose_.pose.position.y + ratio * dy;
       pose.pose.position.z = 0.0;
 
-      if (index == segment_count) {
-        // 最后一点使用用户在 RViz 中画出的朝向，后续控制器靠它完成终点转向。
-        pose.pose.orientation = goal_in_map.pose.orientation;
-      } else {
-        // 中间点朝向沿路径切线，使路径的几何方向清楚且四元数始终有效。
-        pose.pose.orientation = tf2::toMsg(travel_orientation);
-      }
+      // 车体yaw与路径切线独立：按最短角差平滑插值，允许朝向不变的横移。
+      const double initial_yaw = tf2::getYaw(latest_pose_.pose.orientation);
+      const double delta = std::atan2(std::sin(tf2::getYaw(goal_in_map.pose.orientation)-initial_yaw),
+                                     std::cos(tf2::getYaw(goal_in_map.pose.orientation)-initial_yaw));
+      tf2::Quaternion orientation;
+      orientation.setRPY(0, 0, initial_yaw + ratio*ratio*(3-2*ratio)*delta);
+      pose.pose.orientation = tf2::toMsg(orientation);
       path.poses.push_back(pose);
     }
 
@@ -236,7 +245,7 @@ private:
       return;
     }
 
-    if (cancel_requested_) {
+    if (cancel_requested_ && active_goal_->is_canceling()) {
       // 空路径清除 EGO 中的旧任务，再把 action 正式置为已取消。
       publish_empty_path();
       active_goal_->canceled(std::make_shared<NavigateToPose::Result>());
@@ -267,6 +276,8 @@ private:
     if (distance_remaining <= xy_goal_tolerance_ &&
       std::abs(yaw_error) <= yaw_goal_tolerance_)
     {
+      // 成功也撤销参考路径，防止跟踪器在已完成任务上继续修正。
+      publish_empty_path();
       active_goal_->succeed(std::make_shared<NavigateToPose::Result>());
       active_goal_.reset();
       RCLCPP_INFO(get_logger(), "Nav2 Goal 已到达：位置和朝向均进入容差范围");
@@ -317,7 +328,6 @@ private:
   std::string navigate_action_;
   std::string target_frame_;
   double path_spacing_;
-  double min_goal_distance_;
   double transform_timeout_;
   double xy_goal_tolerance_;
   double yaw_goal_tolerance_;
@@ -339,10 +349,19 @@ private:
   rclcpp::TimerBase::SharedPtr action_timer_;
 };
 
+// 先处理任务终态再关闭DDS，避免活跃action析构时向已失效server发布结果。
+static volatile std::sig_atomic_t stop_requested = 0;
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<GoalToPath>());
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  std::signal(SIGINT, [](int) { stop_requested = 1; });
+  std::signal(SIGTERM, [](int) { stop_requested = 1; });
+  auto node = std::make_shared<GoalToPath>();
+  while (rclcpp::ok() && !stop_requested) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  node->stop_goals();
   rclcpp::shutdown();
   return 0;
 }

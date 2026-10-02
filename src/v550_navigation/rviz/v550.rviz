@@ -1,3 +1,4 @@
+# 紫色箭头显示独立于平移切线的车体yaw，便于检查侧移及终点姿态。
 Panels:
 - Class: rviz_common/Displays
   Help Height: 0
@@ -238,6 +239,28 @@ Visualization Manager:
     Alpha: 0.35
     Decay Time: 0
     Use Fixed Frame: true
+  - Class: rviz_default_plugins/Path
+    Name: V550 SE2 trajectory (pose arrows)
+    Enabled: true
+    Value: true
+    Topic:
+      Value: /ego_trajectory
+      Depth: 5
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      History Policy: Keep Last
+    Color: 255; 0; 255
+    Alpha: 1
+    Line Style: Billboards
+    Line Width: 0.02
+    Buffer Length: 1
+    Pose Style: Arrows
+    Pose Color: 255; 0; 255
+    Pose Alpha: 1
+    Head Length: 0.06
+    Head Diameter: 0.04
+    Shaft Length: 0.1
+    Shaft Diameter: 0.015
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

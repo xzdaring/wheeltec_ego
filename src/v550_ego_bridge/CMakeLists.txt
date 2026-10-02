@@ -70,3 +70,7 @@ install(DIRECTORY scripts
 )
 
 ament_package()
+
+# Python 跟踪器与运动学函数放在同一目录，ros2 run 可直接查找并导入。
+install(PROGRAMS scripts/trajectory_follower.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/mecanum_model.py DESTINATION lib/${PROJECT_NAME})

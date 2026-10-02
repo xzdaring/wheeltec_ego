@@ -126,7 +126,7 @@ namespace ego_planner
     {
         // 每次尝试前清空旧结果，规划失败不能继续输出上一个目标的轨迹。
         _plan_traj_results_.clear();
-        if (_global_plan_traj_.size() < 3) return;
+        if (_global_plan_traj_.size() < 4) return; // 底层parameterizeToBspline要求至少4点。
         std::cout << "开始规划..." << std::endl;
         Eigen::Vector3d start_pt;
         Eigen::Vector3d start_vel;
@@ -156,17 +156,11 @@ namespace ego_planner
         local_target_pt[1] = _global_plan_traj_[_global_plan_traj_.size()-1].y;
         local_target_pt[2] = 0;
 
-        start_vel[0] = cos(cur_pose_.z);  //根据实际需求修改接入
-        start_vel[1] = sin(cur_pose_.z);
-        start_vel[2] = 0;
-
-        local_target_vel[0] = 0;//根据实际需求修改接入
-        local_target_vel[1] = 0;
-        local_target_vel[2] = 0;
-
-        start_acc[0] =  cos(cur_pose_.z);   //根据实际需求修改接入
-        start_acc[1] =  sin(cur_pose_.z);
-        start_acc[2] = 0;
+        // 由里程计车体系速度旋转得到map速度，静止时起始速度必须为零。
+        start_vel = Eigen::Vector3d(cur_pose_.vx, cur_pose_.vy, 0.0);
+        local_target_vel.setZero();
+        // 未提供加速度观测，不再把车头单位向量误当成1m/s²。
+        start_acc.setZero();
 
 
         auto start = std::chrono::system_clock::now();
@@ -350,7 +344,7 @@ namespace ego_planner
 
         Eigen::Vector3d pos(Eigen::Vector3d::Zero()), vel(Eigen::Vector3d::Zero()), acc(Eigen::Vector3d::Zero()), pos_f;
         _plan_traj_results_.clear();
-        for (double t_cur = 0; t_cur <= traj_duration_; t_cur += 0.1) 
+        for (double t_cur = 0; t_cur < traj_duration_; t_cur += 0.1)
         {
             pos = traj_[0].evaluateDeBoorT(t_cur);
             vel = traj_[1].evaluateDeBoorT(t_cur);
@@ -360,6 +354,10 @@ namespace ego_planner
             tempPath.y = pos(1);
             _plan_traj_results_.push_back(tempPath);
         }
+        // 固定步长可能跨过最后时刻，显式保留端点以免小车永远差最后几厘米。
+        pos = traj_[0].evaluateDeBoorT(traj_duration_);
+        PathPoint endpoint{}; endpoint.x=pos(0); endpoint.y=pos(1);
+        _plan_traj_results_.push_back(endpoint);
     }
 
 }

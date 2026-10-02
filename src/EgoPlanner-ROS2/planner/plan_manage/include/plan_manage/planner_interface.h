@@ -20,10 +20,9 @@ namespace  ego_planner
 {
     struct PathPoint
     {
-        float x;
-        float y;
-        float z;
-        float v;
+        float x=0, y=0, z=0, v=0;
+        // 当前实测map平面速度；麦轮可横移，不能由yaw假造速度方向。
+        float vx=0, vy=0;
     };
 
     struct ObstacleInfo
