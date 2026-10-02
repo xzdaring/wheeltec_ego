@@ -50,36 +50,25 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
         std::bind(&TrajectoryAndObstaclesPublisher::global_path_callback, this, std::placeholders::_1)
     );
 
-    rviz_point_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
-        "/clicked_point",
-        10,
-        std::bind(&TrajectoryAndObstaclesPublisher::rviz_point_callback, this, std::placeholders::_1)
-    );
-
-    // 注意：这里不再处理 initialpose 来更新 cur_pose_，
-    // 因为位置应该由仿真器决定。规划器只负责接收当前位置。
-    // 但为了触发重规划，我们保留订阅，仅用于设置标志位。
-    pose_estimate_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        "/initialpose",
-        10,
-        std::bind(&TrajectoryAndObstaclesPublisher::pose_estimate_callback, this, std::placeholders::_1)
-    );
-
+    // 目标统一由 goal_to_path 接收；Publish Point 不再手工累积两点触发规划。
+    // /initialpose 属于定位输入，规划器只信任 /current_pose，避免点击改变机器人位置。
     trigger_plan_sub_ = this->create_subscription<std_msgs::msg::Bool>(
         "/trigger_plan",
         10,
         std::bind(&TrajectoryAndObstaclesPublisher::trigger_plan_callback, this, std::placeholders::_1)
     );
 
+    // 膨胀半径是米，显示与碰撞检查共用同一栅格，避免看见的与规划使用的不一致。
+    map_inflate_value_ = declare_parameter<double>("inflation_radius", 0.5);
     init_ego_planner_base();
 
     // 5Hz 规划与发布循环
     timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(50),
+        std::chrono::milliseconds(200),
         std::bind(&TrajectoryAndObstaclesPublisher::publish_and_plan, this)
     );
 
-    RCLCPP_INFO(this->get_logger(), "Planner Ready. Waiting for global path points (/clicked_point)...");
+    RCLCPP_INFO(this->get_logger(), "Planner Ready. Waiting for /ego_global_path from Nav2 Goal...");
 }
 
 
@@ -93,6 +82,7 @@ void TrajectoryAndObstaclesPublisher::pose_callback(const geometry_msgs::msg::Po
 
     std::lock_guard<std::mutex> lock(data_mutex_);
     // 1. 更新机器人初始位姿（原有逻辑）
+    have_pose_ = true;
     cur_pose_.x = msg->pose.position.x;
     cur_pose_.y = msg->pose.position.y;
     cur_pose_.z = 0;
@@ -213,6 +203,10 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         global_plan_traj_.clear();
         global_plan_traj_res_.clear();
         planned_traj.clear();
+        nav_msgs::msg::Path empty;
+        empty.header.frame_id = "map";
+        empty.header.stamp = now();
+        local_traj_pub_->publish(empty);
         has_valid_global_path_ = false;
         has_goal_yaw_ = false;
         needs_replan_ = false;
@@ -283,11 +277,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
     // 必须加锁，因为 cur_pose_ 在回调中更新
     // std::lock_guard<std::mutex> lock(data_mutex_);
 
-    if (!has_valid_global_path_ || global_plan_traj_.empty()) {
-        publish_global_path(); // 即使空的也发布，保持RViz状态
-        return;
-    }
-
+    if (!have_pose_) return;  // 等定位输入后再建立局部栅格，不能使用未初始化位置。
     // 简单策略：总是尝试规划，或者根据 needs_replan_
     // 为了演示流畅性，这里只要允许规划就一直运行
     {
@@ -313,6 +303,14 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
     } 
 
 
+
+    // 地图和膨胀点云与任务无关；启动后即发布，方便选择安全的目标。
+    publish_obstacles();
+    publish_local_obstacles();
+    if (!has_valid_global_path_ || global_plan_traj_.empty() || !should_plan_) {
+        publish_global_path();
+        return;
+    }
 
     if (collisionDetection(planned_traj) || (planned_traj.size() < 10) || needs_replan_) 
     {
@@ -528,7 +526,13 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         ego_planner_->getLocalPlanTrajResults(planned_traj);
 
         if (planned_traj.empty()) {
-        RCLCPP_WARN(this->get_logger(), "EGO planner returned an empty trajectory");
+        // 失败也发空消息，否则 RViz 或后续跟踪器会保留旧目标的轨迹。
+        nav_msgs::msg::Path empty;
+        empty.header.frame_id = "map";
+        empty.header.stamp = now();
+        local_traj_pub_->publish(empty);
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "EGO 无可用局部轨迹；检查目标是否在膨胀障碍内");
         return;
         }
 
@@ -694,7 +698,7 @@ void TrajectoryAndObstaclesPublisher::publish_local_obstacles()
     std::vector<ObstacleInfo> obstacles;
     ego_planner_->getObstacles(obstacles);
 
-    if (obstacles.empty()) return;
+    // 即使无障碍也发布空点云，清除 RViz 上一帧。
 
     sensor_msgs::msg::PointCloud2 visual_obs;
     visual_obs.header.stamp = this->now();
@@ -766,28 +770,16 @@ void TrajectoryAndObstaclesPublisher::discretize_trajectory(const std::vector<Pa
             continue;
         }
 
-        // 计算当前线段需要插入的点数（不含起点，含终点）
-        int num_points = static_cast<int>(seg_length / interval);
-        // 最后一个点到终点的距离（避免累积误差）
-        double last_interval = seg_length - num_points * interval;
-
-        // 生成线段上的离散点
+        // ceil 保证不足 interval 的短段也保留终点；floor 会把所有短段丢光。
+        const int num_points = std::max(1, static_cast<int>(std::ceil(seg_length / interval)));
         for (int j = 1; j <= num_points; ++j) {
-            double ratio;
-            if (j < num_points) {
-                // 前num_points-1个点：按均匀间隔计算
-                ratio = (j * interval) / seg_length;
-            } else {
-                // 最后一个点：直接对齐到线段终点（避免累积误差）
-                ratio = 1.0;
-            }
-
-            // 线性插值计算点坐标
-            PathPoint p;
+            const double ratio = static_cast<double>(j) / num_points;
+            PathPoint p{};
             p.x = start.x + ratio * (end.x - start.x);
             p.y = start.y + ratio * (end.y - start.y);
             discrete_trajectory.push_back(p);
         }
+
     }
 }
 

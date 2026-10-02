@@ -27,6 +27,16 @@ source install/setup.bash
 
 ## 启动
 
+V550 仿真同时启动的 DDS participant 较多。每个终端先加载统一环境，扩大
+CycloneDDS 在本机回环接口上的自动 participant index 范围：
+
+```bash
+source src/v550_ego_bridge/scripts/setup_v550_dds.bash
+```
+
+只修改 `ROS_DOMAIN_ID` 只会改变 DDS 端口基址，不会扩大索引范围；真正解决
+`Failed to find a free participant index` 的是脚本设置的 `CYCLONEDDS_URI`。
+
 只调试状态适配器：
 
 ```bash
@@ -89,3 +99,31 @@ TF，因此不会与 SLAM Toolbox 或 Gazebo 的 TF 发布者争夺同一坐标�
 当前 `goal_to_path` 生成的是直线全局参考路径，适合先验证完整接口链和开阔场景。
 它不是全局绕障算法；以后遇到墙体完全截断直线路径时，应把它替换为 Nav2 全局
 规划器输出的 `nav_msgs/Path`，同时继续发布到 `/ego_global_path`。
+
+## 2026-10-02 录包修复与统一仿真入口
+
+先 Ctrl+C 关闭旧仿真、bridge 和 motion_plan，避免重复节点。工作空间根目录执行：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+source src/v550_ego_bridge/scripts/setup_v550_dds.bash
+ros2 launch v550_ego_bridge ego_sim.launch.py
+```
+
+RViz 固定坐标系为 map。Nav2 Goal 一次拖拽指定位置和朝向；Publish Point 一次
+点击也作为目标，起点来自 /current_pose。蓝色为 /ego_global_path 直线参考路径，
+绿色为 /visual_local_trajectory 优化轨迹，橙色为 /visual_local_obstacles 实际
+膨胀栅格（半径 0.5 m），红色为 /ego_obstacles 激光点。
+膨胀显示在收到位置和雷达后即可出现，路径在收到目标后出现。
+
+录包 rosbag_all 的 /rosout 有三次“拒绝 Nav2 Goal：目标 frame_id 为空”，
+/ego_global_path 和 /visual_local_trajectory 均零条；两次 /clicked_point 触发
+旧的手工拼点逻辑后出现 984 次空轨迹告警。修复短段重采样用 floor 丢失终点的
+错误后，以录包首帧位置和障碍、首次点击坐标测试：一次 action 产生 5 点参考路径
+与 10 点局部轨迹；目标发送前已发布 1825 个膨胀点。
+
+兼容此 RViz 空 frame 请求时会明确报警并按 target_frame=map 解释，其他坐标系
+仍使用 TF。这里没有把目标加入障碍列表。参考直线不保证绕过封闭墙体；不可行的
+目标不能保证产生局部轨迹。尚未实现轨迹到 /cmd_vel 的跟踪控制，本入口用于
+规划与可视化，不能据此声称小车已自动到达目标。

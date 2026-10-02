@@ -64,4 +64,9 @@ install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 
+# 环境脚本需要由用户 source，因此按普通文件安装并保留可读权限。
+install(DIRECTORY scripts
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()

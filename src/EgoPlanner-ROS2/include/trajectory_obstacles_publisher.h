@@ -119,7 +119,8 @@ private:
     std::vector<PathPoint> planned_traj;
     std::vector<PathPoint> global_plan_traj_res_;
 
-    PathPoint  cur_pose_;
+    bool have_pose_ = false;
+    PathPoint cur_pose_{};
 
     vector<vector<Eigen::Vector2d>> a_star_pathes_;
 

@@ -74,7 +74,7 @@ def generate_launch_description():
         # 避免当前系统中的 CycloneDDS 与 Gazebo 插件服务发现冲突
         SetEnvironmentVariable(
             'RMW_IMPLEMENTATION',
-            'rmw_fastrtps_cpp',
+            os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp'),
         ),
 
         # 本机仿真只和本机通信，避免同网段其他 ROS 节点混入

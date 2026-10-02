@@ -19,7 +19,7 @@ def generate_launch_description():
             executable="state_adapter",
             name="v550_ego_state_adapter",
             output="screen",
-            parameters=[state_parameters],
+            parameters=[state_parameters, {"use_sim_time": True}],
         ),
         # 把激光极坐标数据转换成 map 坐标系下的障碍物点云。
         Node(
@@ -27,7 +27,7 @@ def generate_launch_description():
             executable="scan_to_obstacles",
             name="scan_to_obstacles",
             output="screen",
-            parameters=[scan_parameters],
+            parameters=[scan_parameters, {"use_sim_time": True}],
         ),
         # 将 RViz 目标位姿和当前位置连接成 EGO 所需的全局参考路径。
         Node(
@@ -35,6 +35,6 @@ def generate_launch_description():
             executable="goal_to_path",
             name="goal_to_path",
             output="screen",
-            parameters=[goal_parameters],
+            parameters=[goal_parameters, {"use_sim_time": True}],
         ),
     ])

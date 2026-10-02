@@ -124,6 +124,9 @@ namespace ego_planner
 
     void PlannerInterface::makePlan()
     {
+        // 每次尝试前清空旧结果，规划失败不能继续输出上一个目标的轨迹。
+        _plan_traj_results_.clear();
+        if (_global_plan_traj_.size() < 3) return;
         std::cout << "开始规划..." << std::endl;
         Eigen::Vector3d start_pt;
         Eigen::Vector3d start_vel;
@@ -352,7 +355,7 @@ namespace ego_planner
             pos = traj_[0].evaluateDeBoorT(t_cur);
             vel = traj_[1].evaluateDeBoorT(t_cur);
             acc = traj_[2].evaluateDeBoorT(t_cur);
-            PathPoint tempPath;
+            PathPoint tempPath{};
             tempPath.x = pos(0);
             tempPath.y = pos(1);
             _plan_traj_results_.push_back(tempPath);

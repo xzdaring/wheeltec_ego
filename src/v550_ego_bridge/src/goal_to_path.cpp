@@ -6,6 +6,7 @@
 #include <string>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -63,6 +64,15 @@ public:
       goal_topic_, 10,
       std::bind(&GoalToPath::goal_callback, this, std::placeholders::_1));
 
+    // Publish Point 的一次点击也视为目标，起点由实时定位提供。
+    point_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
+      "/clicked_point", 10, [this](geometry_msgs::msg::PointStamped::SharedPtr point) {
+        auto goal = std::make_shared<geometry_msgs::msg::PoseStamped>();
+        goal->header = point->header;
+        goal->pose.position = point->point;
+        goal->pose.orientation.w = 1.0;
+        goal_callback(goal);
+      });
     // TRANSIENT_LOCAL 会保存最后一条路径。即使 motion_plan 稍晚启动，也能收到
     // 最近目标对应的参考路径，作用类似 ROS 1 中 latched publisher。
     auto path_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
@@ -125,10 +135,8 @@ private:
       RCLCPP_WARN(get_logger(), "拒绝 Nav2 Goal：尚未收到 %s", current_pose_topic_.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
-    if (goal->pose.header.frame_id.empty()) {
-      RCLCPP_WARN(get_logger(), "拒绝 Nav2 Goal：目标 frame_id 为空");
-      return rclcpp_action::GoalResponse::REJECT;
-    }
+    // RViz 配置固定为 map；兼容录包中该插件未填写 frame_id 的请求。
+    // transform_goal 会明确警告，并使用配置的 target_frame，不进行隐式 TF 猜测。
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
@@ -279,8 +287,10 @@ private:
   {
     // RViz 正常会填写 Fixed Frame。空 frame_id 无法可靠解释，因此明确拒绝。
     if (input.header.frame_id.empty()) {
-      RCLCPP_WARN(get_logger(), "忽略目标：/goal_pose 的 frame_id 为空");
-      return false;
+      RCLCPP_WARN(get_logger(), "目标 frame_id 为空，按配置的 %s 解释；RViz Fixed Frame 必须一致", target_frame_.c_str());
+      output = input;
+      output.header.frame_id = target_frame_;
+      return true;
     }
 
     if (input.header.frame_id == target_frame_) {
@@ -312,6 +322,7 @@ private:
   double xy_goal_tolerance_;
   double yaw_goal_tolerance_;
 
+  rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr point_sub_;
   bool have_current_pose_{false};
   bool cancel_requested_{false};
   geometry_msgs::msg::PoseStamped latest_pose_;
