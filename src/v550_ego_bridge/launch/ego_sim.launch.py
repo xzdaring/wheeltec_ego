@@ -17,7 +17,7 @@ def generate_launch_description():
         Node(package="v550_ego_bridge", executable="global_route.py", output="screen",
              parameters=[safety, {"use_sim_time": True}]),
         # 无界面回归测试与桌面运行共用启动入口，避免验证另一套配置。
-        DeclareLaunchArgument("use_gui", default_value="true"),
+        DeclareLaunchArgument("use_gui", default_value="false"),
         DeclareLaunchArgument("use_rviz", default_value="true"),
         # 本入口只连接仿真 /cmd_vel；禁用 Nav2 保证不与其他控制器抢发速度。
         Node(package="v550_ego_bridge", executable="trajectory_follower.py", output="screen",

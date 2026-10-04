@@ -116,6 +116,8 @@ private:
     bool has_valid_global_path_;
     bool has_obstacles_;
     bool should_plan_;
+    // 同一目标回退后保持参考跟踪，避免样条与全长折线逐帧交替跳变。
+    bool reference_mode_ = false;
     bool needs_replan_;  // 新增：是否需要重新规划的标志
     bool flag_ = false;
     std::vector<PathPoint> planned_traj;

@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <chrono>
+#include <deque>
 #include <cmath>
 #include <cstddef>
 #include <memory>
@@ -41,7 +43,7 @@ public:
     target_frame_ = this->declare_parameter<std::string>("target_frame", "map");
     min_range_ = this->declare_parameter<double>("min_range", 0.25);
     max_range_ = this->declare_parameter<double>("max_range", 12.0);
-    transform_timeout_ = this->declare_parameter<double>("transform_timeout", 0.10);
+    transform_timeout_ = this->declare_parameter<double>("transform_timeout", 0.50);
     beam_step_ = this->declare_parameter<int>("beam_step", 4);
 
     // 防止错误参数导致除零、负超时或把所有激光点过滤掉。
@@ -55,6 +57,10 @@ public:
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
       scan_topic_, rclcpp::SensorDataQoS(),
       std::bind(&ScanToObstacles::scan_callback, this, std::placeholders::_1));
+
+    // 不在scan回调内阻塞等待：让TF、/clock继续更新，20ms轮询原采样时间。
+    retry_timer_ = this->create_wall_timer(std::chrono::milliseconds(20),
+      std::bind(&ScanToObstacles::drain_scans, this));
 
     // 障碍物也是高频传感器数据。队列保持较小，可避免规划器处理已经过时的环境。
     obstacles_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -76,21 +82,37 @@ private:
       return;
     }
 
-    geometry_msgs::msg::TransformStamped transform;
-    try {
-      // 使用扫描消息自己的时间戳，确保障碍点与机器人在采样时刻的位姿对应。
-      // 一帧只查询一次 TF；每个点重复查询会显著增加开销且可能得到不一致的变换。
-      transform = tf_buffer_.lookupTransform(
-        target_frame_, scan->header.frame_id, rclcpp::Time(scan->header.stamp),
-        rclcpp::Duration::from_seconds(transform_timeout_));
-    } catch (const tf2::TransformException & error) {
-      RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(), 2000,
-        "无法把 %s 变换到 %s，本帧激光跳过: %s",
-        scan->header.frame_id.c_str(), target_frame_.c_str(), error.what());
-      return;
-    }
+    // 队列有界且按墙钟过期，仿真暂停时也不会无限保存旧感知。
+    if (pending_.size() >= 10) pending_.pop_front();
+    pending_.emplace_back(scan, std::chrono::steady_clock::now());
+  }
 
+  void drain_scans()
+  {
+    while (!pending_.empty()) {
+      const auto scan = pending_.front().first;
+      geometry_msgs::msg::TransformStamped transform;
+      try {
+        // 必须查扫描时刻，不能用“最新TF”掩盖延迟而把运动中的墙投到错误位置。
+        transform = tf_buffer_.lookupTransform(target_frame_, scan->header.frame_id,
+          rclcpp::Time(scan->header.stamp), rclcpp::Duration::from_seconds(0.0));
+      } catch (const tf2::TransformException & error) {
+        const double age = std::chrono::duration<double>(
+          std::chrono::steady_clock::now()-pending_.front().second).count();
+        if (age < transform_timeout_) return;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "激光等待原时刻TF超时(%.3fs)，丢弃本帧: %s", age, error.what());
+        pending_.pop_front();
+        continue;
+      }
+      pending_.pop_front();
+      publish_scan(scan, transform);
+    }
+  }
+
+  void publish_scan(const sensor_msgs::msg::LaserScan::SharedPtr & scan,
+    const geometry_msgs::msg::TransformStamped & transform)
+  {
     const double effective_min = std::max(min_range_, static_cast<double>(scan->range_min));
     const double effective_max = std::min(max_range_, static_cast<double>(scan->range_max));
     std::vector<geometry_msgs::msg::Point> points;
@@ -142,6 +164,9 @@ private:
     obstacles_pub_->publish(cloud);
   }
 
+  std::deque<std::pair<sensor_msgs::msg::LaserScan::SharedPtr,
+    std::chrono::steady_clock::time_point>> pending_;
+  rclcpp::TimerBase::SharedPtr retry_timer_;
   std::string scan_topic_;
   std::string obstacles_topic_;
   std::string target_frame_;

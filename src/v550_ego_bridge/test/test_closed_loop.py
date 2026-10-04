@@ -16,6 +16,8 @@ from mecanum_model import wheels,wrap,schedule
 rclpy.init();n=Node('v550_kinematic_sim_test');posepub=n.create_publisher(PoseStamped,'/current_pose',10);odompub=n.create_publisher(Odometry,'/odom_combined',10);obspub=n.create_publisher(PointCloud2,'/ego_obstacles',10)
 map_pub=n.create_publisher(OccupancyGrid,'/map',QoSProfile(depth=1,durability=DurabilityPolicy.TRANSIENT_LOCAL))
 world=OccupancyGrid();world.header.frame_id='map';world.info.width=100;world.info.height=100;world.info.resolution=.1;world.info.origin.position.x=-5.;world.info.origin.position.y=-5.;world.info.origin.orientation.w=1.;world.data=[0]*10000
+# 用未知地图复测整条链路，确保不是仅修改RViz颜色而仍拒绝未知目标。
+if os.environ.get('V550_TEST_UNKNOWN')=='1':world.data=[-1]*10000
 state=[0.,0.,0.];cmd=[0.,0.,0.];cmdtime=[0.];count=[0];lastw=[0.]*4;maxwheel=[0.];lateral=[0.];trajectories=[]
 def oncmd(m):
  cmd[:]=[m.linear.x,m.linear.y,m.angular.z];cmdtime[0]=time.monotonic();maxwheel[0]=max(maxwheel[0],max(abs(w) for w in wheels(*cmd,.17709)));lateral[0]=max(lateral[0],abs(m.linear.y))

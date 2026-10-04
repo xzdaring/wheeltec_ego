@@ -56,17 +56,9 @@ class Router(Node):
             ix,iy=grid.cell(x,y)
             if 0<=ix<grid.w and 0<=iy<grid.h:occupied[iy,ix]=True
         cost=copy.deepcopy(self.map);cost.header.stamp=self.get_clock().now().to_msg()
-        # 未知代表没有观测，不是实体墙；不向已观测自由区膨胀未知边界。
-        # 未知格自身仍禁止通行，真实墙体和当前激光则按完整车体半径膨胀。
+        # 未探索不等于障碍：仅膨胀SLAM实测占用及当前激光，允许向未知区规划。
+        # 这是乐观规划，执行仍依赖新鲜激光和逐周期碰撞检查；地图之外仍有有限边界。
         costs=inflate(occupied,grid.r,self.physical,self.margin)
-        unknown=raw<0
-        if self.pose is not None and now-self.pose_at<.8:
-            # 雷达装在车头，SLAM可能把车身当前占据的区域标成未知。
-            # 仅豁免当前车体内的未知格；不清除任何实测障碍或其膨胀，不放开后方未知通路。
-            yy,xx=np.ogrid[:grid.h,:grid.w]
-            under_body=(grid.ox+(xx+.5)*grid.r-self.pose.position.x)**2+(grid.oy+(yy+.5)*grid.r-self.pose.position.y)**2<=self.physical**2
-            unknown=unknown & ~under_body
-        costs[unknown]=100
         cost.data=costs.ravel().tolist()
         self.costpub.publish(cost);grid=Grid(cost)
         if self.request is None or self.pose is None:return
@@ -75,18 +67,27 @@ class Router(Node):
         # 每秒更新一次路线；地图立即发布，控制器始终按最新地图检查。
         if now-self.last_publish<1 and self.last_path is not None:return
         self.last_publish=now
-        points=grid.route(start,goal)
+        # 保留仍然安全的同目标路线，只裁掉已走部分，避免每秒最短路左右换边。
+        points=[]
+        if self.last_path is not None:
+            old=[(p.pose.position.x,p.pose.position.y) for p in self.last_path.poses]
+            nearest=min(range(len(old)),key=lambda i:math.dist(start,old[i]))
+            remaining=[start]+old[nearest:]
+            if grid.safe(remaining):points=remaining
+        if not points:points=grid.route(start,goal)
         if not points:
             empty=Path();empty.header=self.request.header;self.pub.publish(empty);self.last_path=None
-            self.say('NO_SAFE_ROUTE: 起点实体碰撞/目标膨胀占用/通路未知，保持停车');return
+            self.say('NO_SAFE_ROUTE: 起点实体碰撞/目标膨胀占用/无可行通路，保持停车');return
         path=Path();path.header=self.request.header
-        # 至少6段，避免短路径进入EGO的三次B样条时点数不足。
+        # 仅按距离补点；复用已离散路线时不能每轮再三倍插值，否则点数指数增长。
         for a,b in zip(points,points[1:]):
-            count=max(3,math.ceil(math.dist(a,b)/.10))
+            count=max(1,math.ceil(math.dist(a,b)/.10-1e-6))
             for i in range(count):
                 p=PoseStamped();p.header=path.header;p.pose.position.x=a[0]+(b[0]-a[0])*i/count;p.pose.position.y=a[1]+(b[1]-a[1])*i/count
                 p.pose.orientation.w=1.;path.poses.append(p)
         p=PoseStamped();p.header=path.header;p.pose=target;path.poses.append(p)
+        # 零平移/极短目标仍满足规划入口的至少3点要求。
+        while len(path.poses)<3:path.poses.insert(0,copy.deepcopy(path.poses[0]))
         self.pub.publish(path);self.last_path=path;self.say('ROUTE_READY: 全局参考路径已通过统一膨胀地图检查')
 
 def main():

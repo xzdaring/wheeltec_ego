@@ -252,6 +252,8 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         // 新目标必须整体替换旧路径，不能追加，否则机器人会先驶向历史目标。
+        // 只有新目标重置模式；同一目标的参考更新不得引发模式反复切换。
+        if (reference_stamp_ != msg->header.stamp) reference_mode_ = false;
         reference_stamp_ = msg->header.stamp; // 任务身份随局部轨迹传递。
         global_plan_traj_ = std::move(new_path);
         goal_yaw_ = new_goal_yaw;
@@ -577,7 +579,8 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
     {
         ego_planner_->getLocalPlanTrajResults(planned_traj);
         // 样条若穿膨胀边界，只能使用已经验证的绕障折线；两者都无效则清空停车。
-        if (!safe_path(planned_traj)) {
+        if (reference_mode_ || !safe_path(planned_traj)) {
+            reference_mode_ = true;
             // 0.3m重采样可能跨越原折线拐点；回退必须用保留拐点的原始安全参考。
             planned_traj = safe_path(global_plan_traj_) ? global_plan_traj_ : std::vector<PathPoint>{};
         }

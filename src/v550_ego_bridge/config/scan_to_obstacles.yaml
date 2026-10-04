@@ -14,5 +14,5 @@ scan_to_obstacles:
     # 每四束激光取一点，先降低规划计算量；障碍边缘漏检时可改为 1 或 2。
     beam_step: 4
 
-    # 等待采样时刻 TF 的最长秒数，短等待可容忍轻微发布延迟，又不会长期阻塞回调。
-    transform_timeout: 0.10
+    # 原时间戳TF异步排队最长0.5秒，不阻塞scan回调，过期丢弃而非使用错误时刻。
+    transform_timeout: 0.50
