@@ -7,7 +7,7 @@
 // 构造函数：初始化地图（世界尺寸→栅格数量，初始化原始/膨胀网格）
 GridMap2D::GridMap2D(double resolution, const Eigen::Vector2i& world_size)
     : resolution_(resolution), inflate_radius_(0.5),world_size_(world_size) {  // 默认膨胀半径0.5米
-   
+
 }
 
 void GridMap2D::setCurPose(double x,double y)
@@ -17,7 +17,7 @@ void GridMap2D::setCurPose(double x,double y)
         throw std::invalid_argument("地图分辨率必须为正数（当前：" + std::to_string(resolution_) + "）");
     }
     if (world_size_.x() <= 0 || world_size_.y() <= 0) {
-        throw std::invalid_argument("世界尺寸（x,y）必须为正数（当前：(" + 
+        throw std::invalid_argument("世界尺寸（x,y）必须为正数（当前：(" +
             std::to_string(world_size_.x()) + "," + std::to_string(world_size_.y()) + ")）");
     }
 
@@ -39,14 +39,38 @@ void GridMap2D::setCurPose(double x,double y)
     grid_.resize(grid_rows, std::vector<bool>(grid_cols, false));          // 存储原始+膨胀障碍物
 
     // 打印初始化信息
-    std::cout << "[GridMap2D] 地图初始化完成：" << std::endl;
-    std::cout << "  - 世界尺寸：" << world_size_.x() << "m × " << world_size_.y() << "m" << std::endl;
-    std::cout << "  - 栅格分辨率：" << resolution_ << "m/栅格" << std::endl;
-    std::cout << "  - 栅格数量：" << grid_cols << "列 × " << grid_rows << "行" << std::endl;
-    std::cout << "  - 世界坐标范围：x∈[" << std::fixed << std::setprecision(2) << origin_.x() << "," 
-              << origin_.x() + world_size_.x() << "], y∈[" << origin_.y() << "," 
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[GridMap2D] 地图初始化完成：" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 世界尺寸：" << world_size_.x() << "m × " << world_size_.y() << "m" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 栅格分辨率：" << resolution_ << "m/栅格" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 栅格数量：" << grid_cols << "列 × " << grid_rows << "行" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 世界坐标范围：x∈[" << std::fixed << std::setprecision(2) << origin_.x() << ","
+              << origin_.x() + world_size_.x() << "], y∈[" << origin_.y() << ","
               << origin_.y() + world_size_.y() << "]" << std::endl;
-    std::cout << "  - 默认膨胀半径：" << inflate_radius_ << "m" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 默认膨胀半径：" << inflate_radius_ << "m" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
 }
 
@@ -57,7 +81,11 @@ void GridMap2D::resetGrids() {
     for (auto& row : grid_) {
         std::fill(row.begin(), row.end(), false);
     }
-    std::cout << "[resetGrids] 所有栅格已重置为自由空间。" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[resetGrids] 所有栅格已重置为自由空间。" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 
@@ -65,7 +93,7 @@ void GridMap2D::resetGrids() {
 void GridMap2D::setObstacle(const Eigen::Vector2i& grid_index, bool is_obstacle) {
     // 1. 校验栅格索引合法性
     if (!isIndexValid(grid_index)) {
-        std::cerr << "[setObstacle] 警告：栅格索引（" << grid_index.x() << "," << grid_index.y() 
+        std::cerr << "[setObstacle] 警告：栅格索引（" << grid_index.x() << "," << grid_index.y()
                   << "）超出范围（最大：(" << map_size_.x()-1 << "," << map_size_.y()-1 << ")），不执行设置" << std::endl;
         return;
     }
@@ -76,8 +104,12 @@ void GridMap2D::setObstacle(const Eigen::Vector2i& grid_index, bool is_obstacle)
     // 3. 更新膨胀后网格（初始状态 = 原始网格，膨胀后会叠加膨胀区域）
     grid_[grid_index.y()][grid_index.x()] = is_obstacle;
 
-    std::cout << "[setObstacle] 栅格（" << grid_index.x() << "," << grid_index.y() 
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[setObstacle] 栅格（" << grid_index.x() << "," << grid_index.y()
               << "）设置为" << (is_obstacle ? "障碍物" : "自由空间") << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 // 原始接口：检查点是否为【原始障碍物】（不包含膨胀区域）
@@ -93,7 +125,7 @@ bool GridMap2D::isObstacle(const Eigen::Vector2d& world_pos) const {
 
     // 3. 读取原始网格状态
     bool is_obs = original_grid_[grid_index.y()][grid_index.x()];
-    // std::cout << "[isObstacle] 点（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格（" 
+    // std::cout << "[isObstacle] 点（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格（"
     //           << grid_index.x() << "," << grid_index.y() << "），原始障碍物状态：" << is_obs << std::endl;
     return is_obs;
 }
@@ -108,7 +140,7 @@ std::vector<Eigen::Vector2d> GridMap2D::getObstaclePointCloud(bool return_inflat
     // 遍历整个地图
     for (int row = 0; row < map_size_.y(); ++row) {
         for (int col = 0; col < map_size_.x(); ++col) {
-            
+
             // 根据参数决定检查 膨胀网格 还是 原始网格
             bool is_obs = return_inflated_map ? grid_[row][col] : original_grid_[row][col];
 
@@ -123,7 +155,7 @@ std::vector<Eigen::Vector2d> GridMap2D::getObstaclePointCloud(bool return_inflat
         }
     }
 
-    // std::cout << "[getObstaclePointCloud] 生成点云数量：" << point_cloud.size() 
+    // std::cout << "[getObstaclePointCloud] 生成点云数量：" << point_cloud.size()
     //           << " (模式：" << (return_inflated_map ? "膨胀后" : "原始") << ")" << std::endl;
 
     return point_cloud;
@@ -131,18 +163,23 @@ std::vector<Eigen::Vector2d> GridMap2D::getObstaclePointCloud(bool return_inflat
 
 // 新增接口：检查点是否处于【膨胀后的障碍物区域】（原始障碍物+膨胀区）
 bool GridMap2D::getInflateOccupancy(const Eigen::Vector2d& world_pos) const {
+    if (occupancy_query_) return occupancy_query_(world_pos);
     // 1. 世界坐标→栅格索引
     Eigen::Vector2i grid_index = worldToGrid(world_pos);
 
     // 2. 超出地图范围视为占用（膨胀区延伸到地图边界外，避免路径超出地图）
     if (!isIndexValid(grid_index)) {
-        std::cout << "[getInflateOccupancy] 点（" << world_pos.x() << "," << world_pos.y() << "）超出地图范围，视为膨胀占用" << std::endl;
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[getInflateOccupancy] 点（" << world_pos.x() << "," << world_pos.y() << "）超出地图范围，视为膨胀占用" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         return true;
     }
 
     // 3. 读取膨胀后网格状态（原始+膨胀障碍物）
     bool is_occupied = grid_[grid_index.y()][grid_index.x()];
-    // std::cout << "[getInflateOccupancy] 点（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格（" 
+    // std::cout << "[getInflateOccupancy] 点（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格（"
     //           << grid_index.x() << "," << grid_index.y() << "），膨胀占用状态：" << is_occupied << std::endl;
     return is_occupied;
 }
@@ -155,11 +192,19 @@ void GridMap2D::inflateObstacles(double radius) {
         return;
     }
 
-    std::cout << "\n[inflateObstacles] 开始膨胀障碍物，半径：" << radius << "m" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "\n[inflateObstacles] 开始膨胀障碍物，半径：" << radius << "m" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
     // 2. 计算膨胀半径对应的栅格数（向上取整，确保覆盖完整半径）
     int inflate_grid_num = static_cast<int>(std::ceil(radius / resolution_));
-    std::cout << "  - 膨胀半径对应栅格数：" << inflate_grid_num << "（" << radius << "m / " << resolution_ << "m/栅格）" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 膨胀半径对应栅格数：" << inflate_grid_num << "（" << radius << "m / " << resolution_ << "m/栅格）" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
     // 3. 收集所有原始障碍物的栅格索引（避免重复膨胀）
     std::vector<Eigen::Vector2i> original_obstacle_indices;
@@ -172,10 +217,18 @@ void GridMap2D::inflateObstacles(double radius) {
     }
 
     if (original_obstacle_indices.empty()) {
-        std::cout << "[inflateObstacles] 无原始障碍物，无需膨胀" << std::endl;
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[inflateObstacles] 无原始障碍物，无需膨胀" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         return;
     }
-    std::cout << "  - 原始障碍物数量：" << original_obstacle_indices.size() << "个栅格" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 原始障碍物数量：" << original_obstacle_indices.size() << "个栅格" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
     // 4. 重置膨胀后网格（先恢复为原始障碍物状态，再叠加膨胀区域）
     grid_ = original_grid_;
@@ -215,9 +268,21 @@ void GridMap2D::inflateObstacles(double radius) {
         }
     }
 
-    std::cout << "[inflateObstacles] 障碍物膨胀完成！" << std::endl;
-    std::cout << "  - 膨胀栅格数量：" << inflated_count << "个" << std::endl;
-    std::cout << "  - 膨胀后总占用栅格数：" << (original_obstacle_indices.size() + inflated_count) << "个" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[inflateObstacles] 障碍物膨胀完成！" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 膨胀栅格数量：" << inflated_count << "个" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "  - 膨胀后总占用栅格数：" << (original_obstacle_indices.size() + inflated_count) << "个" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 // // 新增接口：设置默认膨胀半径（支持动态调整）
@@ -227,12 +292,20 @@ void GridMap2D::setInflateRadius(double radius) {
         return;
     }
     inflate_radius_ = radius;
-    std::cout << "[setInflateRadius] 成功更新默认膨胀半径：" << radius << "m（原：" << inflate_radius_ << "m）" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[setInflateRadius] 成功更新默认膨胀半径：" << radius << "m（原：" << inflate_radius_ << "m）" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 // 新增接口：使用默认膨胀半径膨胀障碍物（无参调用）
 void GridMap2D::inflate() {
-    std::cout << "\n[inflate] 开始使用默认半径膨胀障碍物" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "\n[inflate] 开始使用默认半径膨胀障碍物" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     inflateObstacles(inflate_radius_);  // 复用带参膨胀逻辑
 }
 
@@ -242,7 +315,7 @@ Eigen::Vector2i GridMap2D::worldToGrid(const Eigen::Vector2d& world_pos) const {
     // 计算逻辑：(世界坐标 - 原点坐标) / 分辨率 → 栅格偏移，四舍五入到整数
     grid_index.x() = static_cast<int>(std::round((world_pos.x() - origin_.x()) / resolution_));
     grid_index.y() = static_cast<int>(std::round((world_pos.y() - origin_.y()) / resolution_));
-    // std::cout << "[worldToGrid] 世界坐标（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格索引（" 
+    // std::cout << "[worldToGrid] 世界坐标（" << world_pos.x() << "," << world_pos.y() << "）→ 栅格索引（"
     //           << grid_index.x() << "," << grid_index.y() << "）" << std::endl;
     return grid_index;
 }
@@ -251,7 +324,7 @@ Eigen::Vector2i GridMap2D::worldToGrid(const Eigen::Vector2d& world_pos) const {
 Eigen::Vector2d GridMap2D::gridToWorld(const Eigen::Vector2i& grid_index) const {
     // 校验索引合法性
     if (!isIndexValid(grid_index)) {
-        std::cerr << "[gridToWorld] 警告：栅格索引（" << grid_index.x() << "," << grid_index.y() 
+        std::cerr << "[gridToWorld] 警告：栅格索引（" << grid_index.x() << "," << grid_index.y()
                   << "）超出范围，返回原点坐标" << std::endl;
         return origin_;
     }
@@ -260,7 +333,7 @@ Eigen::Vector2d GridMap2D::gridToWorld(const Eigen::Vector2i& grid_index) const 
     Eigen::Vector2d world_pos;
     world_pos.x() = origin_.x() + grid_index.x() * resolution_;
     world_pos.y() = origin_.y() + grid_index.y() * resolution_;
-    // std::cout << "[gridToWorld] 栅格索引（" << grid_index.x() << "," << grid_index.y() << "）→ 世界坐标（" 
+    // std::cout << "[gridToWorld] 栅格索引（" << grid_index.x() << "," << grid_index.y() << "）→ 世界坐标（"
     //           << world_pos.x() << "," << world_pos.y() << "）" << std::endl;
     return world_pos;
 }
@@ -271,7 +344,7 @@ bool GridMap2D::isIndexValid(const Eigen::Vector2i& grid_index) const {
     bool valid = (grid_index.x() >= 0 && grid_index.x() < map_size_.x()) &&
                  (grid_index.y() >= 0 && grid_index.y() < map_size_.y());
     if (!valid) {
-        std::cerr << "[isIndexValid] 栅格索引（" << grid_index.x() << "," << grid_index.y() 
+        std::cerr << "[isIndexValid] 栅格索引（" << grid_index.x() << "," << grid_index.y()
                   << "）无效！地图范围：列[0," << map_size_.x()-1 << "], 行[0," << map_size_.y()-1 << "]" << std::endl;
     }
     return valid;

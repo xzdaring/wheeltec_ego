@@ -10,6 +10,7 @@ link_directories(/usr/include/python2.7)
 
 add_library(    ego_planner_lib  STATIC
                 src/planner_interface.cpp
+                ../traj_utils/src/polynomial_traj.cpp
 )
 
 target_link_libraries(ego_planner_lib 

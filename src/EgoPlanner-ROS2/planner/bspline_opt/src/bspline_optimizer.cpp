@@ -13,10 +13,11 @@ void BsplineOptimizer::setParam()
     lambda4_ = 1.0;//1.0;
     lambda5_ = 1.0;
 
-    dist0_   = 1.0;
+    // 地图已含整车膨胀，额外推出0.10m，避免无人机1m余量使窄通道不可优化。
+    dist0_   = 0.10;
 
-    max_vel_ = 1.0;
-    max_acc_ = 0.5;
+    max_vel_ = 0.25;
+    max_acc_ = 0.4;
 
     order_   = 3;
 
@@ -52,7 +53,7 @@ std::vector<std::vector<Eigen::Vector2d>> BsplineOptimizer::initControlPoints(Ei
     int same_occ_state_times = ENOUGH_INTERVAL + 1;
     bool occ, last_occ = false;
     bool flag_got_start = false, flag_got_end = false, flag_got_end_maybe = false;
-    int i_end = (int)init_points.cols() - order_ - ((int)init_points.cols() - 2 * order_) / 3; // only check closed 2/3 points.
+    int i_end = (int)init_points.cols() - order_; // 跟踪器执行整段，因此碰撞分段必须覆盖后1/3，不能沿用无人机前缀检查。
     for (int i = order_; i <= i_end; ++i)
     {
       for (double a = 1.0; a >= 0.0; a -= step_size)
@@ -115,7 +116,11 @@ std::vector<std::vector<Eigen::Vector2d>> BsplineOptimizer::initControlPoints(Ei
       }
       else
       {
-        printf("a star error, force return!");
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("a star error, force return!");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         return a_star_pathes;
       }
     }
@@ -305,7 +310,11 @@ std::vector<std::vector<Eigen::Vector2d>> BsplineOptimizer::initControlPoints(Ei
       }
       else
       {
-        printf(" ailed to generate direction! Just ignore, it does not matter \n");
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf(" ailed to generate direction! Just ignore, it does not matter \n");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         // Just ignore, it does not matter ^_^.
         // ROS_ERROR("Failed to generate direction! segment_id=%d", i);
       }
@@ -663,7 +672,7 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
     int in_id, out_id;
     vector<std::pair<int, int>> segment_ids;
     bool flag_new_obs_valid = false;
-    int i_end = end_idx - (end_idx - order_) / 3;
+    int i_end = end_idx; // 后段新碰撞也要产生反弹方向，否则L-BFGS会误以为已收敛。
     for (int i = order_ - 1; i <= i_end; ++i)
     {
 
@@ -674,7 +683,11 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
       {
         for (size_t k = 0; k < cps_.direction[i].size(); ++k)
         {
-          cout.precision(2);
+          { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+cout.precision(2);
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
           if ((cps_.points.col(i) - cps_.base_point[i][k]).dot(cps_.direction[i][k]) < 1 * grid_map_->getResolution()) // current point is outside all the collision_points.
           {
             occ = false; // Not really takes effect, just for better hunman understanding.
@@ -699,7 +712,11 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
         }
         if (j < 0) // fail to get the obs free point
         {
-          printf("ERROR! the drone is in obstacle. This should not happen.");
+          { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("ERROR! the drone is in obstacle. This should not happen.");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
           in_id = 0;
         }
 
@@ -715,7 +732,11 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
         }
         if (j >= cps_.size) // fail to get the obs free point
         {
-          printf("WARN! terminal point of the current trajectory is in obstacle, skip this planning.");
+          { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("WARN! terminal point of the current trajectory is in obstacle, skip this planning.");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
           force_stop_type_ = STOP_FOR_ERROR;
           return false;
@@ -740,7 +761,11 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
         }
         else
         {
-          printf("a star error");
+          { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("a star error");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
           segment_ids.erase(segment_ids.begin() + i);
           i--;
         }
@@ -831,7 +856,11 @@ bool BsplineOptimizer::check_collision_and_rebound(void)
             }
         }
         else
-          printf("Failed to generate direction. It doesn't matter.");
+          { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("Failed to generate direction. It doesn't matter.");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
       }
 
       force_stop_type_ = STOP_FOR_REBOUND;
@@ -894,7 +923,11 @@ bool BsplineOptimizer::rebound_optimize()
   bool flag_force_return, flag_occ, success;
   new_lambda2_ = lambda2_;
   constexpr int MAX_RESART_NUMS_SET = 3;
-  std::cout << "start optimze" << std::endl;
+  { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "start optimze" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
   do
   {
@@ -914,7 +947,11 @@ bool BsplineOptimizer::rebound_optimize()
     lbfgs_params.g_epsilon = 0.001;
 
     int result = lbfgs::lbfgs_optimize(variable_num_, q, &final_cost, BsplineOptimizer::costFunctionRebound, NULL, BsplineOptimizer::earlyExit, this, &lbfgs_params);
-    std::cout << "result =" << result << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "result =" << result << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
     if (result == lbfgs::LBFGS_CONVERGENCE ||
         result == lbfgs::LBFGSERR_MAXIMUMITERATION ||
@@ -928,7 +965,7 @@ bool BsplineOptimizer::rebound_optimize()
       double tm, tmp;
       traj.getTimeSpan(tm, tmp);
       double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp) - traj.evaluateDeBoorT(tm)).norm() / grid_map_->getResolution());
-      for (double t = tm; t < tmp * 2 / 3; t += t_step)
+      for (double t = tm; t <= tmp; t += std::min(t_step, 0.02)) // 全段密采样，与外层检查尺度一致，失败后由原重启机制提高碰撞权重。
       {
         Eigen::Vector2d ctrl_point_2d = traj.evaluateDeBoorT(t);
         flag_occ = grid_map_->getInflateOccupancy(ctrl_point_2d);
@@ -936,11 +973,19 @@ bool BsplineOptimizer::rebound_optimize()
         {
           if (t <= bspline_interval_)
           {
-            std::cout << cps_.points.col(1).transpose() << "\n"
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << cps_.points.col(1).transpose() << "\n"
                       << cps_.points.col(2).transpose() << "\n"
                       << cps_.points.col(3).transpose() << "\n"
                       << cps_.points.col(4).transpose() << std::endl;
-            printf("First 3 control points in obstacles! return false, t=%f", t);
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("First 3 control points in obstacles! return false, t=%f", t);
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             return false;
           }
           break;
@@ -962,17 +1007,29 @@ bool BsplineOptimizer::rebound_optimize()
     {
       flag_force_return = true;
       rebound_times++;
-      std::cout << "iter=" << iter_num_ << ",rebound." << std::endl;
+      { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "iter=" << iter_num_ << ",rebound." << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     }
     else
     {
-      printf("Solver error. Return = %d, %s. Skip this planning.\n", result, lbfgs::lbfgs_strerror(result));
+      { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("Solver error. Return = %d, %s. Skip this planning.\n", result, lbfgs::lbfgs_strerror(result));
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     }
 
   } while ((flag_occ && restart_nums < MAX_RESART_NUMS_SET) ||
            (flag_force_return && force_stop_type_ == STOP_FOR_REBOUND && rebound_times <= 20));
   
-  std::cout << "optimuze complete" << std::endl;
+  { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "optimuze complete" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
   return success;
 }
 
@@ -1006,7 +1063,11 @@ bool BsplineOptimizer::refine_optimize()
           result == lbfgs::LBFGS_ALREADY_MINIMIZED ||
           result == lbfgs::LBFGS_STOP))
     {
-      printf("Solver error in refining!, return = %d, %s", result, lbfgs::lbfgs_strerror(result));
+      { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("Solver error in refining!, return = %d, %s", result, lbfgs::lbfgs_strerror(result));
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     }
 
     // 碰撞检测（仅 x、y）
@@ -1014,7 +1075,7 @@ bool BsplineOptimizer::refine_optimize()
     double tm, tmp;
     traj.getTimeSpan(tm, tmp);
     double t_step = (tmp - tm) / ((traj.evaluateDeBoorT(tmp).topRows(2) - traj.evaluateDeBoorT(tm).topRows(2)).norm() / grid_map_->getResolution());
-    for (double t = tm; t < tmp * 2 / 3; t += t_step)
+    for (double t = tm; t <= tmp; t += std::min(t_step, 0.02)) // 全段密采样，与外层检查尺度一致，失败后由原重启机制提高碰撞权重。
     {
       Eigen::Vector2d ctrl_point_2d = traj.evaluateDeBoorT(t).topRows(2);
       if (grid_map_->getInflateOccupancy(ctrl_point_2d))
@@ -1142,7 +1203,11 @@ void BsplineOptimizer::calKappaCost(const Eigen::MatrixXd &q, double &cost,
     }
   }
 
-  std::cout << "[calKappaCost] cost =" << cost << std::endl;
+  { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[calKappaCost] cost =" << cost << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 // 转向代价：仅基于 x、y 计算  约束还不稳定 juchunyu@qq.com
@@ -1224,7 +1289,11 @@ void BsplineOptimizer::calTurnCost(const Eigen::MatrixXd &q, double &cost,
       gradient(1, i + 2) += djdw * (dwday * dadq3 + dwdvy * dvdq3);
     }
   }
-  std::cout << "[turn cost cost =" << cost << std::endl;
+  { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[turn cost cost =" << cost << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 }
 
 // 13. 组合代价（精修）：适配 2D 优化

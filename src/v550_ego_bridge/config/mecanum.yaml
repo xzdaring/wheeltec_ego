@@ -14,3 +14,6 @@ trajectory_follower:
     path_timeout: 1.5
     xy_tolerance: 0.03
     yaw_tolerance: 0.04
+    terminal_enter_distance: 0.08  # 8cm内同时闭环位置和朝向，提前消除到点摆头。
+    terminal_exit_distance: 0.12  # 超过12cm才退出终点模式，以滞回抑制定位波动。
+    terminal_translation_speed: 0.03  # 终点全向微调限速3cm/s，仍执行轮速及碰撞约束。

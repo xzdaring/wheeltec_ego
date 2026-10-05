@@ -14,6 +14,7 @@
 #include <plan_env/grid_map.h>
 #include <plan_manage/plan_container.hpp>
 #include <chrono>
+#include <string> // 保存失败阶段供ROS节点统一输出，底层不逐帧刷屏。
 
 
 namespace  ego_planner
@@ -50,6 +51,7 @@ namespace  ego_planner
             BsplineOptimizer::Ptr bspline_optimizer_rebound_;
 
             int continous_failures_count_{0};
+            std::string failure_reason_; // 累积本轮两种初值各自失败的步骤。
 
             void updateTrajInfo(const UniformBspline &position_traj);
 
@@ -64,6 +66,7 @@ namespace  ego_planner
            
             std::vector<PathPoint> _global_plan_traj_;
             std::vector<PathPoint> _plan_traj_results_;
+            std::vector<PathPoint> warm_path_;
             vector<vector<Eigen::Vector2d>> a_star_pathes_;
 
 
@@ -84,6 +87,10 @@ namespace  ego_planner
             void setCurrentVehiclePos(PathPoint& cur_pose);
 
             void makePlan();
+            const std::string& failureReason() const {return failure_reason_;} // 只读查询，本轮成功时节点不会打印。
+            void resetTrajectory() {_plan_traj_results_.clear();warm_path_.clear();}
+            void setOccupancyQuery(std::function<bool(const Eigen::Vector2d&)> query) {grid_map_->setOccupancyQuery(query);}
+
 
             void getLocalPlanTrajResults(std::vector<PathPoint> &plan_traj_results);  
 

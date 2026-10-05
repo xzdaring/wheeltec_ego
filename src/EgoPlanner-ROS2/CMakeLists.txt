@@ -29,6 +29,8 @@ include_directories(./planner/GridMap2D/include)
 include_directories(./planner/plan_manage/include/plan_manage)
 include_directories(./planner/plan_manage/include)
 include_directories(./planner/include)
+# 复用3D EGO多项式生成器，为2D全局参考和局部初值服务。
+include_directories(./planner/traj_utils/include)
 
 add_subdirectory(planner/plan_manage)
 add_subdirectory(planner/bspline_opt)

@@ -1,3 +1,6 @@
+> **2026-10-05 当前实现**：已改为原EGO思路的多项式全局参考 + 局部A*引导/B样条优化。
+> 下方all3/all4中的Dijkstra及整任务折线回退是历史实现，现已退出运行链路。详见文末“原生EGO链路与最终测试”。
+
 # v550_ego_bridge
 
 V550_mec 仿真/实车接口与 Ego Planner 2D 之间的适配包。
@@ -310,3 +313,87 @@ python3 src/v550_ego_bridge/test/test_wall.py
 ```
 
 重启旧仿真才能加载新的C++节点：ros2 launch v550_ego_bridge ego_sim.launch.py。
+
+## 原生EGO链路与最终测试（2026-10-05）
+
+已读取归档分析：`/home/ubuntu/.codex/archived_sessions/rollout-2026-10-04T20-14-32-01a106d6-5547-7590-be71-dce770ca0e24.jsonl`，并核对
+`/ros_workspace/ego-planner-swarm-ros2_version/src/planner/plan_manage/src/planner_manager.cpp`
+及 `ego_replan_fsm.cpp`。最终目标仍是无需预建图，启动后在线SLAM提供地图和定位。
+
+| 无人机源码思路 | 当前V550实现 |
+|---|---|
+| planGlobalTraj 多项式全局参考，不查询障碍 | motion_plan接收/ego_reference_request，调用移植的PolynomialTraj；固定z=0 |
+| getLocalTarget 滚动选择局部目标 | 从全局参考最近点向前选约1.5m范围的自由目标；遇占用继续向前找 |
+| 当前轨迹余段作为初始化 | 按实测位置裁剪上次成功优化结果，失败不清空成功初值 |
+| A*提供绕障引导，L-BFGS优化B样条 | 复用本工程2D dyn_a_star和bspline_optimizer；失败增加局部A*初值再优化 |
+| 速度/加速度检查、时间重分配及精修 | 恢复checkFeasibility与refineTrajAlgo，使用0.25m/s、0.4m/s²规划尺度 |
+| 执行局部B样条 | /visual_local_trajectory -> trajectory_follower -> V550麦轮限幅 -> /cmd_vel |
+
+全局多项式生成器位于 `src/EgoPlanner-ROS2/planner/traj_utils/`，保留源文件算法和原仓库LICENSE、ORIGIN说明。
+长距离超过4m沿起终点连线插点后调用minSnapTraj，单段使用one_segment_traj_gen。
+蓝色全局参考可以穿墙，它只指引目标方向，不能直接执行。
+绿色局部路径必须通过完整曲线碰撞验证，A*折线也不会直接下发。
+优化暂时失败时继续使用经当前安全地图复检的旧优化余段，持续重试；旧段也不安全就发布空路径停车。
+最后0.10m保留经过碰撞检查的位置/姿态收敛短段，处理退化样条和原地转向。
+
+`global_route.py` 为兼容launch仍保留文件名，现在只发布 `/ego_costmap`，不再生成Dijkstra参考。
+优化器与跟踪器使用同一安全地图，未知不当作实体障碍；地图/感知超时停车机制保留。
+规划范围仍受当前地图及局部A*搜索池限制，不能保证绕过任意大障碍或找到全局通路。
+
+修复的关键错误：A*的Coord2Index对负数直接cast<int>是向零截断，可能把空闲起点映射到前方膨胀格。
+改为先floor再转整数；回归测试确认起点不被平移进墙并能搜索绕障路径。
+另一个停滞原因是失败清空warm start和一秒后强行丢弃仍安全旧优化路径，这两处已修复。
+这些改动附近均有中文“为什么修改”的注释。
+
+与无人机执行器仍有区别：这里没有照搬traj_server的时间跟踪及完整状态机。
+地面车按当前位姿跟踪几何曲线，保留四轮速度/加速度约束和终点yaw控制；不能宣称获得无人机时间轴的严格C2连续执行。
+
+验证记录：
+
+- 编译通过，git diff --check通过。
+- 独立A*负坐标取整/绕墙回归通过。
+- 矩形墙闭环：目标(0.9,0,0)，位置误差0.02285m，yaw误差0.03837rad，Action成功并停车；断言无负vx和车体撞墙。
+  本轮日志包含23次local_astar初值优化成功和40次polynomial_or_previous初值优化成功，执行链路没有折线回退。
+- 全未知地图：横向目标、平移+转向、纯旋转通过，位置误差约0.023m、yaw误差小于0.04rad；取消、激光失联、定位失联、近障停车通过。
+- 真正Gazebo+在线SLAM入口：目标相对(+0.30,+0.15)、yaw=0.5，Action成功，位置误差0.02403m，yaw误差0.03845rad，生成19条姿态轨迹并到位停车。
+
+正常启动（先关闭旧实例）：
+
+```bash
+cd /ros_workspace/wheeltec_sim/wheeltec_nav-main
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+source src/v550_ego_bridge/scripts/setup_v550_dds.bash
+ros2 launch v550_ego_bridge ego_sim.launch.py
+```
+
+独立测试命令仍见前文test_wall.py、test_closed_loop.py与test_gazebo.py，使用各自隔离Domain。
+`test/test_astar_rounding.cpp`可用g++连接构建产物中的libpath_searching.a与liblocal_map.a运行。
+这些结果覆盖上述测试场景，不代表全部未知环境已经验证。
+
+## rosbag_all5：首次规划失败与阶段日志（2026-10-05）
+
+最新修复：优化器碰撞处理覆盖全段；滚动目标额外检查15cm末端余量；A*采用10cm周围占用软代价以避免贴角。原膨胀边界保持。
+原失败并非起终点占用，而是多项式初值REBOUND失败，A*初值的优化曲线未通过整段碰撞检查。
+成功不刷阶段日志；失败每2秒最多输出一次 `[EGO规划失败]`，包含初值、失败步骤、起点与局部目标。
+失败步骤有INPUT、ENDPOINT、ASTAR、REBOUND、REFINE、DYNAMICS、FULL_COLLISION、OUTPUT_COLLISION。
+新规划失败但旧优化余段复检安全时仍可继续执行；都不可用才清空停车。
+
+同输入前40秒回放由176条全空变为174条非空、2条切换清空。录包首次目标静态快照底盘闭环到达，位置误差0.02459m、yaw误差0.03709rad；未知地图及失联停车回归通过。
+验证不等于原动态场景/实车已复测，仍需重启仿真检验。详见 `/home/ubuntu/ws00/V550_rosbag_all5_失败分析与阶段日志_20261005.md`。
+
+### rosbag_all6：终点摆头修复（2026-10-05）
+
+第三个目标的位置误差反复跨越3cm，旧跟踪器在“指向剩余位置”和“对齐目标yaw”之间切换，导致原地摆头。跟踪器现以8cm进入终点模式、12cm退出，同时闭环位置和目标yaw；利用麦轮全向能力进行最高0.03m/s的局部微调。成功容差保持3cm、0.04rad，碰撞和超时停车检查继续生效。
+
+参数位于 `config/mecanum.yaml`：`terminal_enter_distance`、`terminal_exit_distance`、`terminal_translation_speed`。新增控制代码旁已注释原因。当前安装为源码链接，停止并重新启动 `ego_sim.launch.py` 即可加载。
+
+已通过阈值交替输入检查及独立ROS域虚拟运动学闭环：毫米级定位噪声、终点微调、纯旋转、普通未知地图导航，以及取消/失联/近身障碍停车。终点噪声回归位置误差约2.9毫米、朝向误差约2.26度。尚未进行完整Gazebo场景复测。
+
+复跑终点测试（在新终端source ROS、工作空间和DDS脚本后执行，独立域避免影响日常仿真）：
+
+```bash
+ROS_DOMAIN_ID=97 V550_TEST_TERMINAL=1 python3 src/v550_ego_bridge/test/test_closed_loop.py
+```
+
+详细分析：`/home/ubuntu/ws00/V550_rosbag_all6_终点摆头分析与修复_20261005.md`。

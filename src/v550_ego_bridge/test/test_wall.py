@@ -50,7 +50,7 @@ def send(x,y,a):
 ps=[]
 try:
  for pkg,exe in [('ego_planner','motion_plan'),('v550_ego_bridge','goal_to_path'),('v550_ego_bridge','trajectory_follower.py'),('v550_ego_bridge','global_route.py')]:
-  f=open('/tmp/'+exe+'_closed.log','w');ps.append(subprocess.Popen(['ros2','run',pkg,exe],stdout=f,stderr=f,start_new_session=True))
+  f=open('/tmp/'+exe+'_wall.log','w');ps.append(subprocess.Popen(['ros2','run',pkg,exe],stdout=f,stderr=f,start_new_session=True))
  wait(3);assert client.wait_for_server(timeout_sec=2)
  for label,x,y,a in [('wall_detour',.9,0.,0.)]:
   if x is None:x,y=state[:2]

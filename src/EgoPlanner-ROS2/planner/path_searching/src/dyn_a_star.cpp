@@ -97,11 +97,19 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector2d start_pt, Vector2d en
         int num = 0;
         do
         {
-            std::cout << "start point adjust" << start_pt << " end = " << end_pt << std::endl;
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "start point adjust" << start_pt << " end = " << end_pt << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             // 沿起点到终点方向移动一步（仅x、y）
             Vector2d dir = (end_pt - start_pt).normalized();
             start_pt += dir * step_size_;
-            std::cout << "dir =" << dir << " step_size_ =" << step_size_ << std::endl;
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "dir =" << dir << " step_size_ =" << step_size_ << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             num++;
 
             if (!Coord2Index(start_pt, start_idx))
@@ -115,10 +123,18 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector2d start_pt, Vector2d en
          int num = 0;
         do
         {
-            std::cout << "goal point adjust" << start_pt << " end = " << end_pt << std::endl;
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "goal point adjust" << start_pt << " end = " << end_pt << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             // 沿终点到起点方向移动一步（仅x、y）
             Vector2d dir = (start_pt - end_pt).normalized();
-            std::cout << "dir =" << dir << " step_size_ =" << step_size_ << std::endl;
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "dir =" << dir << " step_size_ =" << step_size_ << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             end_pt += dir * step_size_;
             num++;
             if (!Coord2Index(end_pt, end_idx))
@@ -126,7 +142,11 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector2d start_pt, Vector2d en
         } while (checkOccupancy(Index2Coord(end_idx)) && num < 100 );
     }
 
-    std::cout << "[ConvertToIndexAndAdjustStartEndPoints] start_pt = " << start_pt << " end_pt =" << end_pt << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[ConvertToIndexAndAdjustStartEndPoints] start_pt = " << start_pt << " end_pt =" << end_pt << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
 
     return true;
 }
@@ -143,7 +163,11 @@ bool AStar::AstarSearch(const double step_size, Vector2d start_pt, Vector2d end_
     Vector2i start_idx, end_idx;  // 二维索引
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
     {
-        printf("无法处理起点或终点，强制返回！\n");
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+printf("无法处理起点或终点，强制返回！\n");
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         return false;
     }
 
@@ -226,7 +250,12 @@ bool AStar::AstarSearch(const double step_size, Vector2d start_pt, Vector2d end_
                     continue;
 
                 // 计算移动代价（二维欧氏距离：dx和dy的平方和开方）
-                double static_cost = sqrt(dx*dx + dy*dy);
+                double static_cost = sqrt(dx*dx + dy*dy); // 保留步长代价，增加软净空偏好，避免初值贴墙角。
+                const auto center=Index2Coord(neighborIdx); // 在候选格世界坐标处查询周围占用。
+                for(int k=0;k<8;++k){ // 周围膨胀格越多，越不优先选择此引导点。
+                    Eigen::Vector2d probe=center+Eigen::Vector2d(.1*std::cos(k*3.141592653589793/4.),.1*std::sin(k*3.141592653589793/4.)); // 10cm软净空探测，不新增硬障碍。
+                    if(checkOccupancy(probe))static_cost+=.5; // 仅提高代价，保留窄通道可达性。
+                } // A*仍只提供优化初值，不能直接下发执行。
                 tentative_gScore = current->gScore + static_cost;
 
                 if (!flag_explored)  // 新节点：加入开放集
@@ -274,8 +303,12 @@ vector<Vector3d> AStar::get3DPath()
     for (auto ptr : gridPath_)
     {
         pos2d = Index2Coord(ptr->index);
-        pos<<pos2d(0),pos2d(1),0,
-        std::cout << "pos2d:" << pos2d << std::endl;
+        pos << pos2d(0), pos2d(1), 0; // 三维点初始化必须在此结束，不能把后面的调试输出接进Eigen逗号表达式。
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "pos2d:" << pos2d << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         path.push_back(pos);
     }
     reverse(path.begin(), path.end());

@@ -117,7 +117,9 @@ private:
     bool has_obstacles_;
     bool should_plan_;
     // 同一目标回退后保持参考跟踪，避免样条与全长折线逐帧交替跳变。
-    bool reference_mode_ = false;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr reference_pub_;
+    std::vector<PathPoint> last_optimized_;
+    double last_optimized_at_ = -1.;
     bool needs_replan_;  // 新增：是否需要重新规划的标志
     bool flag_ = false;
     std::vector<PathPoint> planned_traj;
@@ -137,8 +139,9 @@ private:
     PathPoint local_pose;
 
     // 参数
-    double max_vel_ = 2.0;
-    double max_acc_ = 3.0;
+    // 地面车局部优化采用保守速度，最终还受麦轮四轮限幅。
+    double max_vel_ = 0.25;
+    double max_acc_ = 0.4;
     double max_jerk_ = 4.0;
     double map_resolution_ = 0.1;
     double map_x_size_ = 50.0;

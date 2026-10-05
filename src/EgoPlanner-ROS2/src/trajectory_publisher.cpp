@@ -7,9 +7,10 @@
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <utility>
+#include <traj_utils/polynomial_traj.h>
 #include "geometry_msgs/msg/quaternion.hpp"  // 确保包含四元数消息类型
 
-TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher() 
+TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
     : Node("ego_planner_interactive_node"),
       has_valid_global_path_(false),
       has_obstacles_(false),
@@ -31,7 +32,7 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
             10,
             std::bind(&TrajectoryAndObstaclesPublisher::pose_callback, this, std::placeholders::_1)
         );
-        
+
 
     // 感知适配器已经把 /scan 转成 map 坐标系下的 PointCloud2。
     // SensorDataQoS 与上游保持一致，并优先处理新数据，避免规划器使用积压的旧障碍。
@@ -45,10 +46,12 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
     // motion_plan 即使稍晚启动，也能收到最近一次目标。
     auto path_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     rviz_global_path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-        "/ego_global_path",
+        "/ego_reference_request",
         path_qos,
         std::bind(&TrajectoryAndObstaclesPublisher::global_path_callback, this, std::placeholders::_1)
     );
+
+    reference_pub_ = create_publisher<nav_msgs::msg::Path>("/ego_global_path", path_qos);
 
     // 目标统一由 goal_to_path 接收；Publish Point 不再手工累积两点触发规划。
     // /initialpose 属于定位输入，规划器只信任 /current_pose，避免点击改变机器人位置。
@@ -209,6 +212,8 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
     // 空路径是 action 取消产生的停止信号，需要清掉旧路径和旧轨迹。
     if (msg->poses.empty()) {
         std::lock_guard<std::mutex> lock(data_mutex_);
+        reference_pub_->publish(*msg);
+        last_optimized_.clear();
         global_plan_traj_.clear();
         global_plan_traj_res_.clear();
         planned_traj.clear();
@@ -231,9 +236,28 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         return;
     }
 
+    if (!have_pose_) return;
+    // 对齐无人机planGlobalTraj：全局只提供多项式方向参考，障碍交由局部rebound处理。
+    Eigen::Vector3d start(cur_pose_.x,cur_pose_.y,0), end(msg->poses.back().pose.position.x,msg->poses.back().pose.position.y,0);
+    Eigen::Vector3d zero=Eigen::Vector3d::Zero(), velocity(cur_pose_.vx,cur_pose_.vy,0);
+    int segments=std::max(1,int(std::ceil((end-start).norm()/4.0)));
+    Eigen::MatrixXd positions(3,segments+1); Eigen::VectorXd times(segments);
+    for(int i=0;i<=segments;++i)positions.col(i)=start+(end-start)*double(i)/segments;
+    for(int i=0;i<segments;++i)times(i)=std::max(.5,(positions.col(i+1)-positions.col(i)).norm()/.25);
+    times(0)*=2.;times(segments-1)*=2.;
+    auto polynomial=segments==1 ? PolynomialTraj::one_segment_traj_gen(start,velocity,zero,end,zero,zero,times(0)) : PolynomialTraj::minSnapTraj(positions,velocity,zero,zero,zero,times);
+    polynomial.init();
+    nav_msgs::msg::Path reference;reference.header=msg->header;
+    int samples=std::max(6,int(std::ceil((end-start).norm()/.05)));
+    for(int i=0;i<=samples;++i){
+        auto pt=polynomial.evaluate(polynomial.getTimeSum()*double(i)/samples);
+        geometry_msgs::msg::PoseStamped ps;ps.header=reference.header;ps.pose.position.x=pt.x();ps.pose.position.y=pt.y();ps.pose.orientation=msg->poses.back().pose.orientation;
+        reference.poses.push_back(ps);
+    }
+    reference_pub_->publish(reference);
     std::vector<PathPoint> new_path;
     new_path.reserve(msg->poses.size());
-    for (const auto & pose : msg->poses) {
+    for (const auto & pose : reference.poses) {
         if (!std::isfinite(pose.pose.position.x) || !std::isfinite(pose.pose.position.y)) {
             RCLCPP_WARN(this->get_logger(), "忽略全局路径：其中包含非有限坐标");
             return;
@@ -253,7 +277,7 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         std::lock_guard<std::mutex> lock(data_mutex_);
         // 新目标必须整体替换旧路径，不能追加，否则机器人会先驶向历史目标。
         // 只有新目标重置模式；同一目标的参考更新不得引发模式反复切换。
-        if (reference_stamp_ != msg->header.stamp) reference_mode_ = false;
+        if (reference_stamp_ != msg->header.stamp) {last_optimized_.clear(); planned_traj.clear(); ego_planner_->resetTrajectory();}
         reference_stamp_ = msg->header.stamp; // 任务身份随局部轨迹传递。
         global_plan_traj_ = std::move(new_path);
         goal_yaw_ = new_goal_yaw;
@@ -273,11 +297,11 @@ void TrajectoryAndObstaclesPublisher::rviz_point_callback(const geometry_msgs::m
     PathPoint point;
     point.x = msg->point.x;
     point.y = msg->point.y;
-    point.z = 0; 
+    point.z = 0;
     global_plan_traj_.push_back(point);
-    
+
     RCLCPP_INFO(this->get_logger(), "添加全局路径点: (%.2f, %.2f), 总点数: %zu", point.x, point.y, global_plan_traj_.size());
-    
+
     if (global_plan_traj_.size() >= 2) {
         has_valid_global_path_ = true;
         needs_replan_ = true;
@@ -303,7 +327,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             for(int i = 0; i < local_obstacles.size();i++)
             {
                 double dist =  sqrt(pow(local_obstacles[i].x - local_pose.x,2) + pow(local_obstacles[i].y - local_pose.y,2));
-                // distance(local_obstacles[i], local_pose); 
+                // distance(local_obstacles[i], local_pose);
                 if(dist < 10)
                 {
                     local_obstacles_res.push_back(local_obstacles[i]);
@@ -312,7 +336,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             ego_planner_->resetMap();
             ego_planner_->setGridMap(local_pose);
             ego_planner_->setObstacles(local_obstacles_res);
-    } 
+    }
 
 
 
@@ -324,6 +348,14 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         return;
     }
 
+    if (!safety_grid_) return;
+    // A*、B样条和执行检查共用安全格，已知的后方墙不会随当前激光视场消失。
+    ego_planner_->setOccupancyQuery([grid=safety_grid_](const Eigen::Vector2d& p){
+        int x=std::floor((p.x()-grid->info.origin.position.x)/grid->info.resolution);
+        int y=std::floor((p.y()-grid->info.origin.position.y)/grid->info.resolution);
+        if(x<0 || y<0 || x>=int(grid->info.width) || y>=int(grid->info.height))return true;
+        return grid->data[y*grid->info.width+x]>0;
+    });
     // 近终点/纯旋转不能送入退化B样条；发布位置-姿态段给全向跟踪器闭环收敛。
     if (std::hypot(global_plan_traj_.back().x-cur_pose_.x, global_plan_traj_.back().y-cur_pose_.y)<0.10) {
         nav_msgs::msg::Path path; path.header.frame_id="map"; path.header.stamp=reference_stamp_;
@@ -338,11 +370,20 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         local_traj_pub_->publish(path); publish_global_path(); return;
     }
 
-    if (collisionDetection(planned_traj) || (planned_traj.size() < 10) || needs_replan_) 
+    // 滚动重规划持续尝试优化，不再被一次失败锁定到折线模式。
+    if (true)
     {
-        std::cout << "replan..." << std::endl;
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "replan..." << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         needs_replan_ = false;
-        std::cout << "[publish_and_plan] cur_pose_.x  = " << cur_pose_.x << " cur_pose_.y =" << cur_pose_.y << std::endl;
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[publish_and_plan] cur_pose_.x  = " << cur_pose_.x << " cur_pose_.y =" << cur_pose_.y << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         a_star_pathes_.clear();
 
         std::vector<ObstacleInfo> local_obstacles;
@@ -356,37 +397,22 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         // 设置全局路径
         if (!global_plan_traj_.empty())
         {
-            std::vector<PathPoint> global_plan_traj_temp;
-
-            discretize_trajectory(global_plan_traj_, global_plan_traj_temp, 0.3);
-             
-            float mindist = 100000000;
-            int minddex = 0;
-            for(int i = 0; i < global_plan_traj_temp.size();i++)
-            {
-                double dist =  distance(global_plan_traj_temp[i], local_pose); 
-                if(dist < mindist)
-                {
-                    mindist = dist;
-                    minddex = i;
-                } 
+            // 类似getLocalTarget：从全局参考最近位置向前选有限视野目标，目标本身必须自由。
+            size_t nearest=0;
+            for(size_t i=1;i<global_plan_traj_.size();++i)
+                if(distance(global_plan_traj_[i],local_pose)<distance(global_plan_traj_[nearest],local_pose))nearest=i;
+            size_t target=global_plan_traj_.size()-1;
+            for(size_t i=nearest;i<global_plan_traj_.size();++i){
+                bool target_clear = !ego_planner_->getInflateOccupancy(global_plan_traj_[i]); // 自由单格不足以容纳末端控制点，先检查目标格。
+                for(int k=0;k<8 && target_clear;++k){ // 检查末端余量，避免局部目标刚好贴住膨胀边缘。
+                    PathPoint probe=global_plan_traj_[i]; // 探测副本，不修改用户最终目标。
+                    probe.x+=.15*std::cos(k*3.141592653589793/4.);probe.y+=.15*std::sin(k*3.141592653589793/4.); // 为局部末端预留15cm优化空间。
+                    target_clear=!ego_planner_->getInflateOccupancy(probe); // 共用原安全地图，不缩小膨胀。
+                } // 最终目标回退仍保留，余量仅影响滚动目标选择。
+                if(distance(global_plan_traj_[i],local_pose)>=1.5 && target_clear){target=i;break;} // 选择具有末端优化空间的目标。
             }
-
-            std::vector<PathPoint> global_plan_traj_after;
-            global_plan_traj_after.push_back(local_pose);
-            for(int i = minddex; i < global_plan_traj_temp.size();i++)
-            {
-                global_plan_traj_after.push_back(global_plan_traj_temp[i]);
-            }
-            discretize_trajectory(global_plan_traj_after, global_plan_traj_temp, 0.3);
-            
-            int length = 50;
-            if(global_plan_traj_temp.size() < length) length = global_plan_traj_temp.size();
             global_plan_traj_res_.clear();
-            for(int i = 0; i < length;i++)
-            {
-                global_plan_traj_res_.push_back(global_plan_traj_temp[i]);
-            }
+            for(size_t i=nearest;i<=target;++i)global_plan_traj_res_.push_back(global_plan_traj_[i]);
             // ego_planner_->setPathPoint(global_plan_traj_res_);
         }
         ego_planner_->setPathPoint(global_plan_traj_res_);
@@ -396,14 +422,14 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             ego_planner_->setGridMap(local_pose);
             flag_ = true;
         }
-        
+
         ego_planner_->setCurrentVehiclePos(local_pose);
-        
+
         std::vector<ObstacleInfo> local_obstacles_res;
         for(int i = 0; i < local_obstacles.size();i++)
         {
             double dist =  sqrt(pow(local_obstacles[i].x - local_pose.x,2) + pow(local_obstacles[i].y - local_pose.y,2));
-            // distance(local_obstacles[i], local_pose); 
+            // distance(local_obstacles[i], local_pose);
             if(dist < 10)
             {
                 local_obstacles_res.push_back(local_obstacles[i]);
@@ -412,7 +438,11 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         ego_planner_->setObstacles(local_obstacles_res);
         // 3. 执行规划
         // if(global_plan_traj_res_.size() > 5)
-        std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  << std::endl;
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
         // if(global_plan_traj_res_.size() > 5 && !global_plan_traj_.empty())
         {
             ego_planner_->makePlan();
@@ -423,7 +453,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
             // ego_planner_->getAStarPath(a_star_pathes_);
             // 规划成功后，needs_replan_ 可以置 false，
             // 但如果是连续控制，通常每一帧都规划。
-        needs_replan_ = false; 
+        needs_replan_ = false;
         // } else {
         //     RCLCPP_WARN(this->get_logger(), "规划失败!");
         // }
@@ -444,12 +474,16 @@ bool TrajectoryAndObstaclesPublisher::collisionDetection(std::vector<PathPoint>&
         bool status = ego_planner_->getInflateOccupancy(planned_traj[i]);
         if(status)
         {
-            std::cout << "[collisionDetection] ok=" << std::endl; 
+            { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "[collisionDetection] ok=" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
             return true;
         }
     }
 
-    return false; 
+    return false;
 }
 
 // 发布可视化全局路径
@@ -572,17 +606,35 @@ bool TrajectoryAndObstaclesPublisher::safe_path(const std::vector<PathPoint>& po
 // 发布Ego Planner规划后的局部轨迹
 void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
 {
-    std::cout << "发布Ego Planner规划后的局部轨迹" << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "发布Ego Planner规划后的局部轨迹" << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     planned_traj.clear();
-    std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  << std::endl;
+    { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     // if(global_plan_traj_res_.size() > 5)
     {
         ego_planner_->getLocalPlanTrajResults(planned_traj);
-        // 样条若穿膨胀边界，只能使用已经验证的绕障折线；两者都无效则清空停车。
-        if (reference_mode_ || !safe_path(planned_traj)) {
-            reference_mode_ = true;
-            // 0.3m重采样可能跨越原折线拐点；回退必须用保留拐点的原始安全参考。
-            planned_traj = safe_path(global_plan_traj_) ? global_plan_traj_ : std::vector<PathPoint>{};
+        // 只执行通过安全检查的优化曲线。失败时保留经最新地图复检的旧优化余段，并持续重试。
+        // 全局多项式和A*折线均不直接下发，以免“看似导航”绕过EGO优化。
+        if (!planned_traj.empty() && safe_path(planned_traj)) {
+            last_optimized_=planned_traj;last_optimized_at_=get_clock()->now().seconds();
+        } else {
+            const std::string failure = planned_traj.empty() ? ego_planner_->failureReason() : "OUTPUT_COLLISION: 曲线输出与统一安全地图不一致"; // 明确最后一道安全门失败。
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[EGO规划失败] %s; 起点=(%.3f,%.3f), 局部目标=(%.3f,%.3f)", failure.c_str(), cur_pose_.x, cur_pose_.y, global_plan_traj_res_.empty()?cur_pose_.x:global_plan_traj_res_.back().x, global_plan_traj_res_.empty()?cur_pose_.y:global_plan_traj_res_.back().y); // 仅失败时每2秒汇总一次，成功不刷阶段日志。
+            planned_traj.clear();
+            if (!last_optimized_.empty()) {
+                size_t nearest=0;
+                for(size_t i=1;i<last_optimized_.size();++i)
+                    if(distance(last_optimized_[i],cur_pose_)<distance(last_optimized_[nearest],cur_pose_))nearest=i;
+                std::vector<PathPoint> remaining(last_optimized_.begin()+nearest,last_optimized_.end());
+                if(safe_path(remaining))planned_traj=remaining;
+            }
         }
 
         if (planned_traj.empty()) {
@@ -591,24 +643,27 @@ void TrajectoryAndObstaclesPublisher::publish_planned_trajectory()
         empty.header.frame_id = "map";
         empty.header.stamp = reference_stamp_; // 空轨迹也属于当前任务。
         local_traj_pub_->publish(empty);
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-            "EGO 无可用局部轨迹；检查目标是否在膨胀障碍内");
+        // 失败阶段已在上面统一输出，删除重复且误导性的“检查目标占用”提示。
         return;
         }
 
-        std::cout << "planned start x = "
+        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
+if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
+std::cout << "planned start x = "
                   << planned_traj.front().x
                   << " , start y ="
                   << planned_traj.front().y
                   << std::endl;
+} // 调试输出结束。
+} // 用外层块保持原有if/else语义。
     }
     // else
-    // { 
+    // {
     //     std::cout << "use global path !!!" << std::endl;
     //     planned_traj = global_plan_traj_res_;
     // }
-    
-   
+
+
     // if (planned_traj.empty()) return;
 
     nav_msgs::msg::Path visual_traj;
@@ -860,7 +915,7 @@ int main(int argc, char *argv[])
     // 【强制修改】使用默认的单线程执行器
     // 这能保证回调函数 PoseCallback 和 TimerCallback 永远不会同时运行
     // 彻底根除锁竞争导致的随机崩溃
-    rclcpp::spin(node); 
+    rclcpp::spin(node);
 
     rclcpp::shutdown();
     return 0;

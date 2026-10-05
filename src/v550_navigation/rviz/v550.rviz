@@ -170,7 +170,7 @@ Visualization Manager:
     Use Timestamp: false
     Value: true
   - Class: rviz_default_plugins/Path
-    Name: EGO Global Reference
+    Name: EGO Polynomial Reference (not collision-free)
     Enabled: true
     Value: true
     Topic:
@@ -186,7 +186,7 @@ Visualization Manager:
     Buffer Length: 1
     Pose Style: None
   - Class: rviz_default_plugins/Path
-    Name: EGO Local Trajectory
+    Name: EGO Optimized Local Trajectory
     Enabled: true
     Value: true
     Topic:

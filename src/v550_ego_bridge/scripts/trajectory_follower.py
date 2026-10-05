@@ -41,6 +41,12 @@ class Follower(Node):
         self.path_timeout=param('path_timeout',1.5)
         self.xy_tol=param('xy_tolerance',.03)
         self.yaw_tol=param('yaw_tolerance',.04)
+        self.terminal_enter=param('terminal_enter_distance',.08)  # 进入终点区域后同时闭环位置和yaw，避免3cm边界反复切换朝向。
+        self.terminal_exit=param('terminal_exit_distance',.12)  # 退出距离大于进入距离，定位小幅波动不会反复改变控制模式。
+        self.terminal_speed=param('terminal_translation_speed',.03)  # 终点仅允许低速全向微调，不能把此模式用于长距离倒车。
+        self.terminal=False  # 每个新导航任务重新建立终点模式，防止继承上一目标状态。
+        if not (self.xy_tol < self.terminal_enter < self.terminal_exit) or self.terminal_speed<=0:  # 容差与滞回区间必须有序。
+            raise ValueError('终点参数必须满足 xy_tolerance < enter < exit，且微调速度为正')  # 尽早拒绝会引起抖动的参数组合。
         if min(self.arm,self.radius,self.speed,self.accel,self.footprint,self.timeout,self.path_timeout,self.xy_tol,self.yaw_tol,self.wmax)<=0:
             raise ValueError('运动学尺寸、限值及超时必须为正')
         self.grid=None;self.grid_at=0.
@@ -82,6 +88,7 @@ class Follower(Node):
         if self.goal is not None and m.poses and stamp(m.header)==self.task_id:
             self.goal=m.poses[-1].pose;return
         self.stop();self.path=None;self.reference=None
+        self.terminal=False  # 换目标、取消或完成均清除模式；同任务路径更新不清除。
         self.task_id=stamp(m.header)
         self.goal=m.poses[-1].pose if m.poses and m.header.frame_id=='map' else None
         # 换目标先清空旧轨迹显示，等相同任务 stamp 的局部路径才允许运动。
@@ -144,16 +151,21 @@ class Follower(Node):
         p=self.path[index];vx,vy=body_velocity(1.2*(p[0]-x),1.2*(p[1]-y),theta)
         # 前方200度雷达不适合长距离倒车：先转向行驶方向，再平移。
         # 保留小幅vy修正（麦轮全向能力），不再沿终点yaw倒着走完整条路径。
-        if distance>self.xy_tol:
-            if distance<.10:
-                vx,vy=body_velocity(1.2*(self.goal.position.x-x),1.2*(self.goal.position.y-y),theta)
-                bearing=math.atan2(self.goal.position.y-y,self.goal.position.x-x)
-            else:bearing=math.atan2(p[1]-y,p[0]-x)
-            angular=wrap(bearing-theta)
-            if abs(angular)>.5:vx=vy=0.
-            vx=max(0.,vx)
-        else:
-            vx=vy=0.;angular=error  # 到位置后再单独对齐目标姿态，避免向后追位置。
+        if self.terminal and distance>self.terminal_exit:  # 明显离开终点区才恢复朝行驶方向前进，避免阈值抖动。
+            self.terminal=False  # 大位移扰动后重新沿局部路径接近终点。
+        elif not self.terminal and distance<=self.terminal_enter:  # 比验收容差更早接管终点位姿。
+            self.terminal=True  # 同一目标内保留模式，位置误差跨过3cm也不改追踪朝向。
+        if self.terminal:  # 麦轮可独立控制平移与转动，终点处不必先掉头才能修正几毫米位置。
+            vx,vy=body_velocity(1.2*(self.goal.position.x-x),1.2*(self.goal.position.y-y),theta)  # 将世界系位置反馈变换到车体系。
+            scale=min(1.,self.terminal_speed/max(math.hypot(vx,vy),1e-9))  # 限制平移合速度，保留修正方向。
+            vx*=scale  # 允许终点区域内受限的前后微调，后续扫掠碰撞检查仍必须通过。
+            vy*=scale  # 保留麦轮横移，同时修正位置以免只转yaw时漂出验收范围。
+            angular=error  # 始终对齐用户目标yaw，不再切换到几厘米残差的方位角。
+        else:  # 终点区域之外保持原有朝前行驶策略。
+            bearing=math.atan2(p[1]-y,p[0]-x)  # 沿当前局部路径前视方向走，避免远距离倒行。
+            angular=wrap(bearing-theta)  # 使用最短角度误差控制转向。
+            if abs(angular)>.5:vx=vy=0.  # 车头偏离较大时先转向再平移。
+            vx=max(0.,vx)  # 常规路径跟踪不允许向后追赶前视点。
         wz=max(-self.wmax,min(self.wmax,1.8*angular))
         (vx,vy,wz),w=limit(vx,vy,wz,self.prev,dt,self.arm,self.speed,self.accel)
         # 用包围整车的圆检查短时扫掠，覆盖任意朝向；只检查中心点会漏掉车角碰撞。

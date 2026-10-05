@@ -6,6 +6,7 @@
 #define GRID_MAP_2D_H
 
 #include <vector>
+#include <functional>
 #include <Eigen/Dense>
 #include <memory>
 #include <iostream>
@@ -13,6 +14,7 @@
 // 二维栅格地图类（与A*算法配套）
 class GridMap2D {
 private:
+    std::function<bool(const Eigen::Vector2d&)> occupancy_query_;
     std::vector<std::vector<bool>> grid_;           // 栅格数据：true=障碍物，false=自由空间
     std::vector<std::vector<bool>> original_grid_;  // 原始障碍物网格（true=原始障碍物）
     double resolution_;                             // 栅格分辨率（米/格）
@@ -26,6 +28,8 @@ private:
 
 
 public:
+    // 优化器与跟踪器查询同一米制安全地图，避免“两套膨胀”让优化解不断被拒绝。
+    void setOccupancyQuery(std::function<bool(const Eigen::Vector2d&)> query) {occupancy_query_=query;}
     /**
      * @brief 构造函数
      * @param resolution 栅格分辨率（米/格）
@@ -52,9 +56,9 @@ public:
             for (auto& row : grid_) {
                 std::fill(row.begin(), row.end(), false);
             }
-            std::cout << "[resetMap] 所有栅格已重置为自由空间。" << std::endl;
+            // 正常刷新不打印，避免逐帧成功日志淹没失败阶段。
         } else {
-            std::cout << "[resetMap] 警告：地图尚未初始化，无法重置。" << std::endl;
+            // 启动期等待不刷屏，规划失败由上层汇总。
         }
     }
 

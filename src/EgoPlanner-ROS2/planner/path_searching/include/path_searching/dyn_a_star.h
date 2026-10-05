@@ -111,7 +111,8 @@ inline Eigen::Vector2d AStar::Index2Coord(const Eigen::Vector2i &index) const
 
 inline bool AStar::Coord2Index(const Eigen::Vector2d &pt, Eigen::Vector2i &idx) const
 {
-	idx = ((pt - center_) * inv_step_size_ + Eigen::Vector2d(0.5, 0.5)).cast<int>() + CENTER_IDX_;
+	// cast<int>对负数向零截断，会把起点错映射到前方障碍；先floor才是最近格取整。
+	idx = (((pt - center_) * inv_step_size_).array() + 0.5).floor().cast<int>().matrix() + CENTER_IDX_;
 
 	if (idx(0) < 0 || idx(0) >= POOL_SIZE_(0) || idx(1) < 0 || idx(1) >= POOL_SIZE_(1))
 	{
