@@ -397,3 +397,19 @@ ROS_DOMAIN_ID=97 V550_TEST_TERMINAL=1 python3 src/v550_ego_bridge/test/test_clos
 ```
 
 详细分析：`/home/ubuntu/ws00/V550_rosbag_all6_终点摆头分析与修复_20261005.md`。
+
+### 实车总入口
+
+将本工程相关包部署并编译到车机后，在车机终端source ROS及该工作空间，再运行：
+
+```bash
+ros2 launch v550_ego_bridge ego_real.launch.py
+```
+
+默认启动真实底盘/雷达、扫描归一化、在线SLAM、三个适配器、障碍地图、EGO规划器和轨迹跟踪器；不启动Gazebo或Nav2，不需要预先地图。默认关闭RViz，有桌面可附加 `use_rviz:=true`。
+
+若已经单独启动硬件，附加 `bringup_hardware:=false`；若在线SLAM也已经启动，再附加 `start_slam:=false`。不要同时运行另一套Nav2/遥控速度发布器。本入口继承终端DDS配置；远程电脑RViz需另行配置跨机DDS发现，现有localhost脚本仅适合同机通信。
+
+`bridge.launch.py` 新增 `use_sim_time` 参数：默认true保持仿真兼容，实车总入口显式传false。实车底层 `real_navigation.launch.py` 已修正返回类型，并取消强制覆盖RMW/localhost，避免同一启动链使用不同DDS配置。
+
+已验证相关两包构建及 `ros2 launch v550_ego_bridge ego_real.launch.py --show-args` 参数解析；未启动真实驱动或进行实车运动验证。轮半径、限速和雷达方向仍需以实车标定结果为准。

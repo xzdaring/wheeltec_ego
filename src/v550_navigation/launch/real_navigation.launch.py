@@ -193,7 +193,7 @@ def generate_launch_description():
     )
 
     # launch描述
-    return LaunchConfiguration([
+    return LaunchDescription([  # launch入口必须返回动作列表，不能返回参数替换对象。
         # 默认同时启动底盘和雷达
         DeclareLaunchArgument(
             'bringup_hardware',
@@ -221,25 +221,8 @@ def generate_launch_description():
             default_value='true',
             description='是否启动 Nav2 navigation_launch.py',
         ),
-        # ROS通讯隔离
-        
-        # 所有实车节点都在车机上运行。
-        # 如果使用另一台电脑运行 RViz，需要改成：
-        # ROS_LOCALHOST_ONLY=0
-        # 并让两台电脑使用相同的 ROS_DOMAIN_ID。
-        SetEnvironmentVariable(
-            'ROS_LOCALHOST_ONLY',
-            '1',
-        ),
+        # 继承终端DDS设置，避免此子launch强制切换RMW或localhost而与EGO节点失联。
 
-        # 与仿真保持一致，使用 FastRTPS。
-        # 如果车机系统统一使用 CycloneDDS，可删除这一行。
-        SetEnvironmentVariable(
-            'RMW_IMPLEMENTATION',
-            'rmw_fastrtps_cpp',
-        ),
-        
-        
         # 启动顺序：
         # 1. 底盘和雷达
         # 2. 扫描归一化
