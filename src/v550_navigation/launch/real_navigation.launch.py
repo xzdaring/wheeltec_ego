@@ -104,7 +104,7 @@ def generate_launch_description():
     # 雷达扫面归一化
     normalizer = Node(
         package='v550_navigation',
-        executable='normalize_scan',
+        executable='normalize_scan.py',  # 与CMake安装的可执行文件名一致。
         name='v550_scan_normalizer',
         parameters=[{
             # 原始雷达话题
@@ -116,9 +116,9 @@ def generate_launch_description():
             # 固定输出点数
             'scan_points': 800,
 
-            # 前方约 200°视场
-            'fov_min': -1.7453292519943295,
-            'fov_max': 1.7453292519943295,
+            # 实车雷达360°：保留完整一圈，避免截断后地图边界不包含车体。
+            'fov_min': -3.141592653589793,
+            'fov_max': 3.141592653589793,
 
             # 实车不使用 Gazebo 仿真时间
             'use_sim_time': False,

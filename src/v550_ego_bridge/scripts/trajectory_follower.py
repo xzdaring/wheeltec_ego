@@ -149,7 +149,7 @@ class Follower(Node):
         # 前视点不能跨过拐角内侧的膨胀格；缩短前视距离而非沿弦线切墙角。
         while index>nearest and not self.grid.safe([(x,y),self.path[index][:2]]):index-=1
         p=self.path[index];vx,vy=body_velocity(1.2*(p[0]-x),1.2*(p[1]-y),theta)
-        # 前方200度雷达不适合长距离倒车：先转向行驶方向，再平移。
+        # 实车使用360度雷达；仍保留先朝行驶方向转向的跟踪策略，避免无意长距离倒行。
         # 保留小幅vy修正（麦轮全向能力），不再沿终点yaw倒着走完整条路径。
         if self.terminal and distance>self.terminal_exit:  # 明显离开终点区才恢复朝行驶方向前进，避免阈值抖动。
             self.terminal=False  # 大位移扰动后重新沿局部路径接近终点。

@@ -75,10 +75,10 @@ def normalize_scan(scan,count,fov_min,fov_max):
             continue
 
          # 计算当前激光束在原始雷达坐标系中的角度
-        angle = scan.angle_min + index * scan.angle_increment       
+        angle = math.atan2(math.sin(scan.angle_min + index * scan.angle_increment), math.cos(scan.angle_min + index * scan.angle_increment))  # 实车是0到2π，转成负π到π后才能保留右前方扫描。
 
         # 只保留前方设定视场角内的数据
-        if angle < fov_max or angle >fov_max:
+        if angle < fov_min or angle > fov_max:  # 原来两边都比较最大值会过滤几乎全部障碍点。
             continue
 
         # 将当前角度映射到输出扫描的固定格
@@ -130,16 +130,16 @@ class ScanNormalizer(Node):
          # 输出固定点数
         self.declare_parameter('scan_points',800)
 
-        # 输出最小角度，约 -100°
+        # 实车360°扫描下界为-π，与角度归一化后的范围一致。
         self.declare_parameter(
             'fov_min',
-            -1.7453292519943295,
+            -3.141592653589793,
         )
 
-        # 输出最大角度，约 +100°
+        # 实车360°扫描上界为+π，不再裁掉后方观测。
         self.declare_parameter(
             'fov_max',
-            1.7453292519943295,
+            3.141592653589793,
         )
 
         #读取参数
@@ -167,7 +167,7 @@ class ScanNormalizer(Node):
         )
 
         # 订阅原始激光数据
-        self.subscriptions = self.create_subscription(
+        self.scan_subscription = self.create_subscription(  # subscriptions是Node只读属性，使用独立成员保存订阅。
             LaserScan,
             input_topic,
             self.receive_scan,
@@ -179,25 +179,27 @@ class ScanNormalizer(Node):
             f'points={self.count}, '
             f'fov=[{self.fov_min:.4f}, {self.fov_max:.4f}]'
         )
-    def main(args=Node):
-        """
-        ROS 2 Python 节点入口。
-        """
-        rclpy.init(args=args)
+    def receive_scan(self, scan):  # 补齐订阅回调，原文件引用了不存在的方法。
+        try:  # 单帧数据错误只丢弃该帧，不能让SLAM的输入节点退出。
+            result = normalize_scan(scan, self.count, self.fov_min, self.fov_max)  # 保留时间戳与laser坐标系，只统一角度采样。
+        except ValueError as error:  # 捕获归一化函数明确报告的输入错误。
+            self.get_logger().warning(f'跳过无效激光: {error}', throttle_duration_sec=2.0)  # 限频提示异常，避免刷屏。
+            return  # 无效帧不发布，避免把错误数据交给SLAM。
+        self.publisher.publish(result)  # 发布固定800点扫描，恢复SLAM的数据入口。
 
-        node = ScanNormalizer()
 
-        try:
-            rclpy.spin(node)
+def main(args=None):  # 入口必须在类定义外；None让rclpy读取正常命令行参数。
+    rclpy.init(args=args)  # 不能把Node类作为参数列表传入DDS初始化。
+    node = None  # 构造失败时也能清理ROS上下文。
+    try:  # 在类已定义完成后创建节点，避免类定义阶段递归执行入口。
+        node = ScanNormalizer()  # 构造真实发布器和订阅器。
+        rclpy.spin(node)  # 持续处理激光回调。
+    except KeyboardInterrupt:  # 支持终端Ctrl+C正常退出。
+        pass  # 不将用户主动退出当作节点故障。
+    finally:  # 正常或异常退出均释放节点和上下文。
+        if node is not None:node.destroy_node()  # 只有构造成功才销毁节点。
+        if rclpy.ok():rclpy.shutdown()  # 避免重复关闭已结束的上下文。
 
-        except KeyboardInterrupt:
-            pass
 
-        finally:
-            node.destroy_node()
-
-            if rclpy.ok():
-                rclpy.shutdown()
-
-    if __name__ == '__main__':
-        main()
+if __name__ == '__main__':  # 导入纯函数做录包测试时不启动节点。
+    main()  # 仅作为可执行程序运行时进入ROS事件循环。
