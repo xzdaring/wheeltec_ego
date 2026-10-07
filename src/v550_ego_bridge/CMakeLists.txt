@@ -44,6 +44,8 @@ ament_target_dependencies(
 # goal_to_path 是任务适配器：当前位置 + RViz 目标 -> 全局参考路径。
 add_executable(goal_to_path src/goal_to_path.cpp)
 target_compile_features(goal_to_path PUBLIC cxx_std_17)
+
+
 ament_target_dependencies(
   goal_to_path
   geometry_msgs
