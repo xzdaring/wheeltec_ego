@@ -200,7 +200,9 @@ printf("a star error, force return!");
       int got_intersection_id = -1;
       for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
       {
+        bool intersection_found = false; // 每个控制点独立记录交点，不能复用上个点的成功标记。
         Eigen::Vector2d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
+        if (a_star_pathes[i].empty()) continue; // 无A*引导时跳过该点，避免初始索引访问空路径。
         int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
         double val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val;
         while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size())
@@ -211,6 +213,8 @@ printf("a star error, force return!");
             --Astar_id;
           else
             ++Astar_id;
+
+          if (Astar_id < 0 || Astar_id >= static_cast<int>(a_star_pathes[i].size())) break; // 索引移动后先检查边界，不能等到下一轮while。
 
           val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law);
 
@@ -224,14 +228,14 @@ printf("a star error, force return!");
 
             //cout << "i=" << i << " j=" << j << " Astar_id=" << Astar_id << " last_Astar_id=" << last_Astar_id << " intersection_point = " << intersection_point.transpose() << endl;
 
-            got_intersection_id = j;
+            intersection_found = true; // 先标记本点找到交点，生成非空约束后才允许向邻点传播。
             break;
           }
         }
 
-        if (got_intersection_id >= 0)
+        if (intersection_found) // 未找到交点时不读取未初始化的intersection_point。
         {
-          cps_.flag_temp[j] = true;
+          // 有效标记推迟到base_point和direction都写入后。
           double length = (intersection_point - cps_.points.col(j)).norm();
           if (length > 1e-5)
           {
@@ -245,6 +249,7 @@ printf("a star error, force return!");
                   a += grid_map_->getResolution();
                 cps_.base_point[j].push_back((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j));
                 cps_.direction[j].push_back((intersection_point - cps_.points.col(j)).normalized());
+                cps_.flag_temp[j] = true; got_intersection_id = j; // 仅非空、有效约束可作为传播种子，避免空vector.back崩溃。
                 break;
               }
             }
@@ -257,6 +262,7 @@ printf("a star error, force return!");
       {
         Eigen::Vector2d ctrl_pts_law(cps_.points.col(segment_ids[i].second) - cps_.points.col(segment_ids[i].first)), intersection_point;
         Eigen::Vector2d middle_point = (cps_.points.col(segment_ids[i].second) + cps_.points.col(segment_ids[i].first)) / 2;
+        if (a_star_pathes[i].empty()) continue; // 无A*引导时跳过该点，避免初始索引访问空路径。
         int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
         double val = (a_star_pathes[i][Astar_id] - middle_point).dot(ctrl_pts_law), last_val = val;
         while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size())
@@ -267,6 +273,8 @@ printf("a star error, force return!");
             --Astar_id;
           else
             ++Astar_id;
+
+          if (Astar_id < 0 || Astar_id >= static_cast<int>(a_star_pathes[i].size())) break; // 索引移动后先检查边界，不能等到下一轮while。
 
           val = (a_star_pathes[i][Astar_id] - middle_point).dot(ctrl_pts_law);
 
@@ -782,8 +790,10 @@ printf("a star error");
         int got_intersection_id = -1;
         for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
         {
-          Eigen::Vector2d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
-          int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
+          bool intersection_found = false; // 每个控制点独立记录交点，不能复用上个点的成功标记。
+        Eigen::Vector2d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
+          if (a_star_pathes[i].empty()) continue; // 无A*引导时跳过该点，避免初始索引访问空路径。
+        int Astar_id = a_star_pathes[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
           double val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val;
           while (Astar_id >= 0 && Astar_id < (int)a_star_pathes[i].size())
           {
@@ -793,6 +803,8 @@ printf("a star error");
               --Astar_id;
             else
               ++Astar_id;
+
+            if (Astar_id < 0 || Astar_id >= static_cast<int>(a_star_pathes[i].size())) break; // 索引移动后先检查边界，不能等到下一轮while。
 
             val = (a_star_pathes[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law);
 
@@ -806,14 +818,14 @@ printf("a star error");
                    (ctrl_pts_law.dot(cps_.points.col(j) - a_star_pathes[i][Astar_id]) / ctrl_pts_law.dot(a_star_pathes[i][Astar_id] - a_star_pathes[i][last_Astar_id])) // = t
                   );
 
-              got_intersection_id = j;
+              intersection_found = true; // 先标记本点找到交点，生成非空约束后才允许向邻点传播。
               break;
             }
           }
 
-          if (got_intersection_id >= 0)
+          if (intersection_found) // 未找到交点时不读取未初始化的intersection_point。
           {
-            cps_.flag_temp[j] = true;
+            // 有效标记推迟到base_point和direction都写入后。
             double length = (intersection_point - cps_.points.col(j)).norm();
             if (length > 1e-5)
             {
@@ -827,6 +839,7 @@ printf("a star error");
                     a += grid_map_->getResolution();
                   cps_.base_point[j].push_back((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j));
                   cps_.direction[j].push_back((intersection_point - cps_.points.col(j)).normalized());
+                cps_.flag_temp[j] = true; got_intersection_id = j; // 仅非空、有效约束可作为传播种子，避免空vector.back崩溃。
                   break;
                 }
               }

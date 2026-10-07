@@ -18,6 +18,10 @@ TrajectoryAndObstaclesPublisher::TrajectoryAndObstaclesPublisher()
       needs_replan_(false),
       flag_(false) // 初始化 flag_
 {
+    planning_horizon_ = declare_parameter<double>("planning_horizon", 1.5); // 用户按米配置滚动局部规划距离。
+    replan_interval_ = declare_parameter<double>("replan_interval", 0.5); // 类似FSM thresh_replan_time，周期续接优化轨迹。
+    if (!std::isfinite(planning_horizon_) || planning_horizon_ < .3 || !std::isfinite(replan_interval_) || replan_interval_ <= 0.) throw std::invalid_argument("invalid planning_horizon/replan_interval"); // 拒绝退化视野和无效周期。
+    local_target_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/ego_local_target", 10); // 发布实际送给优化器的局部目标。
     // 1. 创建发布者
     global_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("visual_global_path", 10);
     a_star_path_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("trajectories", 10);
@@ -214,6 +218,7 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         std::lock_guard<std::mutex> lock(data_mutex_);
         reference_pub_->publish(*msg);
         last_optimized_.clear();
+        global_progress_=0; plan_state_=PlanState::WAIT_TARGET; last_plan_time_=-1.; // 取消后不继承旧任务进度。
         global_plan_traj_.clear();
         global_plan_traj_res_.clear();
         planned_traj.clear();
@@ -279,6 +284,7 @@ void TrajectoryAndObstaclesPublisher::global_path_callback(
         // 只有新目标重置模式；同一目标的参考更新不得引发模式反复切换。
         if (reference_stamp_ != msg->header.stamp) {last_optimized_.clear(); planned_traj.clear(); ego_planner_->resetTrajectory();}
         reference_stamp_ = msg->header.stamp; // 任务身份随局部轨迹传递。
+        global_progress_=0; plan_state_=PlanState::GEN_NEW_TRAJ; last_plan_time_=-1.; // 新参考的索引属于新采样序列，必须重新建立进度。
         global_plan_traj_ = std::move(new_path);
         goal_yaw_ = new_goal_yaw;
         has_goal_yaw_ = true;
@@ -313,7 +319,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
     // 必须加锁，因为 cur_pose_ 在回调中更新
     // std::lock_guard<std::mutex> lock(data_mutex_);
 
-    if (!have_pose_) return;  // 等定位输入后再建立局部栅格，不能使用未初始化位置。
+    if (!have_pose_) {plan_state_=PlanState::INIT; return;} // INIT等待实测定位，不以默认原点规划。
     // 简单策略：总是尝试规划，或者根据 needs_replan_
     // 为了演示流畅性，这里只要允许规划就一直运行
     {
@@ -348,7 +354,7 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         return;
     }
 
-    if (!safety_grid_) return;
+    if (!safety_grid_) {plan_state_=PlanState::INIT; return;} // INIT等待地图，禁止未感知就进入执行态。
     // A*、B样条和执行检查共用安全格，已知的后方墙不会随当前激光视场消失。
     ego_planner_->setOccupancyQuery([grid=safety_grid_](const Eigen::Vector2d& p){
         int x=std::floor((p.x()-grid->info.origin.position.x)/grid->info.resolution);
@@ -370,14 +376,15 @@ void TrajectoryAndObstaclesPublisher::publish_and_plan()
         local_traj_pub_->publish(path); publish_global_path(); return;
     }
 
-    // 滚动重规划持续尝试优化，不再被一次失败锁定到折线模式。
-    if (true)
+    const double now=get_clock()->now().seconds(); // 与仿真/实车统一时间源，回跳时重新规划。
+    auto remaining=optimized_remaining(); // 每个周期都检查最新地图，而不是只在优化时检查障碍。
+    const bool safe_remaining=!remaining.empty() && safe_path(remaining); // 新障碍可立即打断旧曲线执行。
+    const bool due=last_plan_time_<0. || now<last_plan_time_ || now-last_plan_time_>=replan_interval_; // 时间达到阈值则向前滚动。
+    fresh_plan_=false; // 默认EXEC只发布已验证的旧优化余段。
+    if (plan_state_==PlanState::GEN_NEW_TRAJ || !safe_remaining || due) // 新目标、安全失效、周期到期均触发规划。
     {
-        { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
-if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
-std::cout << "replan..." << std::endl;
-} // 调试输出结束。
-} // 用外层块保持原有if/else语义。
+        plan_state_=last_optimized_.empty()?PlanState::GEN_NEW_TRAJ:PlanState::REPLAN_TRAJ; // 有旧轨迹时保留原优化器热启动。
+        fresh_plan_=true; last_plan_time_=now; // 即使失败也记录本次尝试；无安全路径时下一周期继续重试。
         needs_replan_ = false;
         { // 默认关闭逐帧调试输出，终端只保留ROS失败阶段汇总。
 if (false) { // 如需底层数值调试可临时开启，不影响规划逻辑。
@@ -394,26 +401,10 @@ std::cout << "[publish_and_plan] cur_pose_.x  = " << cur_pose_.x << " cur_pose_.
             local_pose = cur_pose_;
             local_obstacles = obstacles_; // 拷贝障碍物列表
         } // <--- 锁在这里自动释放！后续
-        // 设置全局路径
-        if (!global_plan_traj_.empty())
-        {
-            // 类似getLocalTarget：从全局参考最近位置向前选有限视野目标，目标本身必须自由。
-            size_t nearest=0;
-            for(size_t i=1;i<global_plan_traj_.size();++i)
-                if(distance(global_plan_traj_[i],local_pose)<distance(global_plan_traj_[nearest],local_pose))nearest=i;
-            size_t target=global_plan_traj_.size()-1;
-            for(size_t i=nearest;i<global_plan_traj_.size();++i){
-                bool target_clear = !ego_planner_->getInflateOccupancy(global_plan_traj_[i]); // 自由单格不足以容纳末端控制点，先检查目标格。
-                for(int k=0;k<8 && target_clear;++k){ // 检查末端余量，避免局部目标刚好贴住膨胀边缘。
-                    PathPoint probe=global_plan_traj_[i]; // 探测副本，不修改用户最终目标。
-                    probe.x+=.15*std::cos(k*3.141592653589793/4.);probe.y+=.15*std::sin(k*3.141592653589793/4.); // 为局部末端预留15cm优化空间。
-                    target_clear=!ego_planner_->getInflateOccupancy(probe); // 共用原安全地图，不缩小膨胀。
-                } // 最终目标回退仍保留，余量仅影响滚动目标选择。
-                if(distance(global_plan_traj_[i],local_pose)>=1.5 && target_clear){target=i;break;} // 选择具有末端优化空间的目标。
-            }
-            global_plan_traj_res_.clear();
-            for(size_t i=nearest;i<=target;++i)global_plan_traj_res_.push_back(global_plan_traj_[i]);
-            // ego_planner_->setPathPoint(global_plan_traj_res_);
+        if (!select_local_target()) { // 无视野内安全目标时不能偷偷回退到远处固定终点。
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[EGO规划失败] LOCAL_TARGET: 视野内无安全前向目标，horizon=%.2f", planning_horizon_); // 仅失败输出阶段。
+            fresh_plan_=false; plan_state_=safe_remaining?PlanState::REPLAN_TRAJ:PlanState::EMERGENCY_STOP; // 有安全余段则保留，否则停车重试。
+            publish_global_path(); publish_planned_trajectory(); return; // 复用完整碰撞验证和空轨迹停车出口。
         }
         ego_planner_->setPathPoint(global_plan_traj_res_);
 
@@ -575,6 +566,50 @@ void TrajectoryAndObstaclesPublisher::publish_a_star_path()
 
 }
 
+// 沿当前实测位置截取优化余段；麦轮运动不能用无人机轨迹时间直接冒充真实位置。
+std::vector<PathPoint> TrajectoryAndObstaclesPublisher::optimized_remaining()
+{
+    if(last_optimized_.empty()) return {}; // 未优化成功过就没有可执行余段。
+    size_t nearest=0; // 在上一条优化曲线上找实测最近点。
+    for(size_t i=1;i<last_optimized_.size();++i) // 障碍导致偏离时也从实际位置续接。
+        if(distance(last_optimized_[i],cur_pose_)<distance(last_optimized_[nearest],cur_pose_)) nearest=i; // 去掉已走过的部分。
+    return {last_optimized_.begin()+nearest,last_optimized_.end()}; // 调用者仍需检查当前位置到余段的连接。
+}
+
+// 参考3D EGO getLocalTarget：维护进度并按空间视野滚动；地面车额外检查安全栅格。
+bool TrajectoryAndObstaclesPublisher::select_local_target()
+{
+    const auto & path=global_plan_traj_; // 全局多项式只提供前进方向，不直接执行。
+    if(path.size()<3) return false; // 原2D优化器要求至少三个参考点。
+    global_progress_=std::min(global_progress_,path.size()-1); // 防御参考长度变化。
+    size_t nearest=global_progress_; // 进度不后退，避免绕障时重选走过的参考。
+    for(size_t i=global_progress_;i<path.size();++i) // 对应原FSM的last_progress_time最近点搜索。
+        if(distance(path[i],cur_pose_)<distance(path[nearest],cur_pose_)) nearest=i; // 用实测车位更新前进进度。
+    global_progress_=nearest; // 同目标跨周期保留进度。
+    size_t boundary=nearest; // 只搜索当前位置空间视野以内的全局前缀。
+    while(boundary+1<path.size() && distance(path[boundary+1],cur_pose_)<=planning_horizon_) ++boundary; // 达到horizon就截断，绝不一直找远处终点。
+    if(distance(path[nearest],cur_pose_)>planning_horizon_) return false; // 偏离参考超过视野时明确失败，不跳出视野规划。
+    for(size_t j=boundary+1;j>nearest;--j) { // 边界落在障碍中时向内寻找安全目标，不越过视野追固定点。
+        size_t target=j-1; PathPoint goal=path[target]; // 保留原目标姿态字段。
+        if(distance(goal,cur_pose_)<.05) continue; // 仅排除小于5cm的退化段；不得在10cm位姿接管阈值外留下无法规划的空档。
+        bool clear=!ego_planner_->getInflateOccupancy(goal); // 目标格必须空闲。
+        if(target+1<path.size()) for(int k=0;k<8 && clear;++k) { // 中间局部目标保留优化净空；最终目标不人为移动。
+            PathPoint probe=goal; probe.x+=.15*std::cos(k*3.141592653589793/4.); probe.y+=.15*std::sin(k*3.141592653589793/4.); // 沿用15cm末端余量。
+            clear=!ego_planner_->getInflateOccupancy(probe); // 仍使用同一膨胀地图。
+        }
+        if(!clear) continue; // 不允许把障碍中的点作为优化端点。
+        global_plan_traj_res_.assign(path.begin()+nearest,path.begin()+target+1); // 原EGO局部优化只接收窗口内参考。
+        if(global_plan_traj_res_.size()<3) { // 稀疏采样时补三个参考点，障碍仍交由优化和最终安全检查处理。
+            PathPoint mid=cur_pose_; mid.x=(cur_pose_.x+goal.x)/2.; mid.y=(cur_pose_.y+goal.y)/2.; // 中点仅是优化初值，不是可执行折线。
+            global_plan_traj_res_={cur_pose_,mid,goal}; // 满足2D优化器接口契约。
+        }
+        geometry_msgs::msg::PoseStamped msg; msg.header.frame_id="map"; msg.header.stamp=get_clock()->now(); // 显示当前选出的滚动目标。
+        msg.pose.position.x=goal.x; msg.pose.position.y=goal.y; msg.pose.orientation.w=1.; local_target_pub_->publish(msg); // 该话题仅用于诊断，不作为车头控制指令。
+        return true; // 保留makePlan中的B样条、rebound和A*优化种子逻辑。
+    }
+    return false; // 不输出未经验证的远端或直线回退目标。
+}
+
 // 完整路径硬检查，不能只依赖B样条优化的软碰撞代价。
 bool TrajectoryAndObstaclesPublisher::safe_path(const std::vector<PathPoint>& points)
 {
@@ -619,14 +654,16 @@ std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  
 } // 用外层块保持原有if/else语义。
     // if(global_plan_traj_res_.size() > 5)
     {
-        ego_planner_->getLocalPlanTrajResults(planned_traj);
+        if (fresh_plan_) ego_planner_->getLocalPlanTrajResults(planned_traj); // 只读取本轮真实优化产生的结果。
+        else planned_traj=optimized_remaining(); // EXEC保持发布心跳，使跟踪器不因等待重规划而超时停车。
         // 只执行通过安全检查的优化曲线。失败时保留经最新地图复检的旧优化余段，并持续重试。
         // 全局多项式和A*折线均不直接下发，以免“看似导航”绕过EGO优化。
         if (!planned_traj.empty() && safe_path(planned_traj)) {
-            last_optimized_=planned_traj;last_optimized_at_=get_clock()->now().seconds();
+            if (fresh_plan_) {last_optimized_=planned_traj;last_optimized_at_=get_clock()->now().seconds();} // 旧路径心跳不能冒充新优化时间。
+            plan_state_=PlanState::EXEC_TRAJ; // 只有完整曲线通过安全检查才进入执行态。
         } else {
             const std::string failure = planned_traj.empty() ? ego_planner_->failureReason() : "OUTPUT_COLLISION: 曲线输出与统一安全地图不一致"; // 明确最后一道安全门失败。
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[EGO规划失败] %s; 起点=(%.3f,%.3f), 局部目标=(%.3f,%.3f)", failure.c_str(), cur_pose_.x, cur_pose_.y, global_plan_traj_res_.empty()?cur_pose_.x:global_plan_traj_res_.back().x, global_plan_traj_res_.empty()?cur_pose_.y:global_plan_traj_res_.back().y); // 仅失败时每2秒汇总一次，成功不刷阶段日志。
+            if (fresh_plan_) RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[EGO规划失败] %s; 起点=(%.3f,%.3f), 局部目标=(%.3f,%.3f)", failure.c_str(), cur_pose_.x, cur_pose_.y, global_plan_traj_res_.empty()?cur_pose_.x:global_plan_traj_res_.back().x, global_plan_traj_res_.empty()?cur_pose_.y:global_plan_traj_res_.back().y); // 仅失败时每2秒汇总一次，成功不刷阶段日志。
             planned_traj.clear();
             if (!last_optimized_.empty()) {
                 size_t nearest=0;
@@ -638,6 +675,7 @@ std::cout << "global_plan_traj_res_.size()  =" << global_plan_traj_res_.size()  
         }
 
         if (planned_traj.empty()) {
+        plan_state_=PlanState::EMERGENCY_STOP; // 没有安全优化余段就发空路径，禁止执行全局参考或A*折线。
         // 失败也发空消息，否则 RViz 或后续跟踪器会保留旧目标的轨迹。
         nav_msgs::msg::Path empty;
         empty.header.frame_id = "map";
