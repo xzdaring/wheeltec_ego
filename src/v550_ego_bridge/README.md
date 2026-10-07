@@ -432,3 +432,16 @@ ros2 launch v550_ego_bridge ego_real.launch.py planning_horizon:=1.5 replan_inte
 绕障测试还发现并修复优化器已有的未初始化交点/空约束传播和A*索引越界问题。有效约束产生后才设置成功标记，避免空vector.back导致段错误。
 
 隔离验证脚本在车机 `/home/wheeltec/v550_validation/test_rolling_fsm.py`，结果在同目录 `rolling_fsm_result.log`。该测试仅启动规划器，发布虚拟位置与障碍栅格，不启动底盘、跟踪器或发布速度。它检查滚动目标前移、视野限制、绕墙、最终目标、阻断停车输出、恢复及取消。实车跟踪闭环仍需另行测试。
+
+### zsh 终端加载环境
+
+下文既有 `.bash` 环境命令适用于 Bash。若终端使用 zsh，请改用：
+
+```zsh
+cd /ros_workspace/wheeltec_sim/wheeltec_nav-main
+source /opt/ros/humble/setup.zsh
+source install/setup.zsh
+source src/v550_ego_bridge/scripts/setup_v550_dds.bash
+```
+
+DDS脚本已兼容Bash和zsh，文件名保持不变；`source`由当前shell解释，文件首行shebang不会切换shell。不要修改系统ROS生成的setup文件来补救shell不匹配。
