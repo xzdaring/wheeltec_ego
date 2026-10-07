@@ -104,7 +104,7 @@ def generate_launch_description():
     # 雷达扫面归一化
     normalizer = Node(
         package='v550_navigation',
-        executable='normalize_scan',
+        executable='normalize_scan.py',  # 与CMake安装的可执行文件名一致。
         name='v550_scan_normalizer',
         parameters=[{
             # 原始雷达话题
@@ -116,9 +116,9 @@ def generate_launch_description():
             # 固定输出点数
             'scan_points': 800,
 
-            # 前方约 200°视场
-            'fov_min': -1.7453292519943295,
-            'fov_max': 1.7453292519943295,
+            # 实车雷达360°：保留完整一圈，避免截断后地图边界不包含车体。
+            'fov_min': -3.141592653589793,
+            'fov_max': 3.141592653589793,
 
             # 实车不使用 Gazebo 仿真时间
             'use_sim_time': False,
@@ -193,7 +193,7 @@ def generate_launch_description():
     )
 
     # launch描述
-    return LaunchConfiguration([
+    return LaunchDescription([  # launch入口必须返回动作列表，不能返回参数替换对象。
         # 默认同时启动底盘和雷达
         DeclareLaunchArgument(
             'bringup_hardware',
@@ -221,25 +221,8 @@ def generate_launch_description():
             default_value='true',
             description='是否启动 Nav2 navigation_launch.py',
         ),
-        # ROS通讯隔离
-        
-        # 所有实车节点都在车机上运行。
-        # 如果使用另一台电脑运行 RViz，需要改成：
-        # ROS_LOCALHOST_ONLY=0
-        # 并让两台电脑使用相同的 ROS_DOMAIN_ID。
-        SetEnvironmentVariable(
-            'ROS_LOCALHOST_ONLY',
-            '1',
-        ),
+        # 继承终端DDS设置，避免此子launch强制切换RMW或localhost而与EGO节点失联。
 
-        # 与仿真保持一致，使用 FastRTPS。
-        # 如果车机系统统一使用 CycloneDDS，可删除这一行。
-        SetEnvironmentVariable(
-            'RMW_IMPLEMENTATION',
-            'rmw_fastrtps_cpp',
-        ),
-        
-        
         # 启动顺序：
         # 1. 底盘和雷达
         # 2. 扫描归一化

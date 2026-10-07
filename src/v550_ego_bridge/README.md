@@ -397,3 +397,38 @@ ROS_DOMAIN_ID=97 V550_TEST_TERMINAL=1 python3 src/v550_ego_bridge/test/test_clos
 ```
 
 详细分析：`/home/ubuntu/ws00/V550_rosbag_all6_终点摆头分析与修复_20261005.md`。
+
+### 实车总入口
+
+将本工程相关包部署并编译到车机后，在车机终端source ROS及该工作空间，再运行：
+
+```bash
+ros2 launch v550_ego_bridge ego_real.launch.py
+```
+
+默认启动真实底盘/雷达、扫描归一化、在线SLAM、三个适配器、障碍地图、EGO规划器和轨迹跟踪器；不启动Gazebo或Nav2，不需要预先地图。默认关闭RViz，有桌面可附加 `use_rviz:=true`。
+
+若已经单独启动硬件，附加 `bringup_hardware:=false`；若在线SLAM也已经启动，再附加 `start_slam:=false`。不要同时运行另一套Nav2/遥控速度发布器。本入口继承终端DDS配置；远程电脑RViz需另行配置跨机DDS发现，现有localhost脚本仅适合同机通信。
+
+`bridge.launch.py` 新增 `use_sim_time` 参数：默认true保持仿真兼容，实车总入口显式传false。实车底层 `real_navigation.launch.py` 已修正返回类型，并取消强制覆盖RMW/localhost，避免同一启动链使用不同DDS配置。
+
+已验证相关两包构建及 `ros2 launch v550_ego_bridge ego_real.launch.py --show-args` 参数解析；未启动真实驱动或进行实车运动验证。轮半径、限速和雷达方向仍需以实车标定结果为准。
+
+### 实车滚动局部规划（2026-10-07）
+
+本次修改位于车机 `/home/wheeltec/wheeltec_ego_real`。参考无人机 `ego_replan_fsm.cpp` 的局部目标搜索和执行/重规划逻辑，按地面车实测位置更新全局参考进度，继续使用已有2D EGO B样条优化和麦轮跟踪器。
+
+```bash
+ros2 launch v550_ego_bridge ego_real.launch.py planning_horizon:=1.5 replan_interval:=0.5 use_rviz:=true
+```
+
+- `planning_horizon`：局部目标相对车体的空间距离上限，单位米；不是绕障轨迹的弧长上限。
+- `replan_interval`：周期重规划时间，单位秒。新目标和旧轨迹不再安全也会触发规划，不等周期到期。
+- `/ego_local_target`：实际选择的局部目标PoseStamped；可用 `ros2 topic echo /ego_local_target`，或在RViz添加Pose显示观察。
+- 执行阶段持续发布并检查旧优化轨迹余段，避免等待重规划时跟踪器超时；优化失败时只保留仍然安全的余段，没有则发布空路径停车。
+- 进入最终目标的规划视野后，局部目标保持最终目标位置是正确行为；最后10cm由已有位姿收敛分支衔接，成功仍由实际位姿判断，不以无人机轨迹计时到期代替实车到达。
+- 中间目标需要空闲格及末端净空；窗口内无可用目标时记录LOCAL_TARGET失败，不默默跳到视野外的远端固定点。已有碰撞检查没有关闭。
+
+绕障测试还发现并修复优化器已有的未初始化交点/空约束传播和A*索引越界问题。有效约束产生后才设置成功标记，避免空vector.back导致段错误。
+
+隔离验证脚本在车机 `/home/wheeltec/v550_validation/test_rolling_fsm.py`，结果在同目录 `rolling_fsm_result.log`。该测试仅启动规划器，发布虚拟位置与障碍栅格，不启动底盘、跟踪器或发布速度。它检查滚动目标前移、视野限制、绕墙、最终目标、阻断停车输出、恢复及取消。实车跟踪闭环仍需另行测试。

@@ -120,6 +120,15 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr reference_pub_;
     std::vector<PathPoint> last_optimized_;
     double last_optimized_at_ = -1.;
+    enum class PlanState { INIT, WAIT_TARGET, GEN_NEW_TRAJ, REPLAN_TRAJ, EXEC_TRAJ, EMERGENCY_STOP }; // 对齐无人机FSM阶段，停止通过空轨迹通知跟踪器。
+    PlanState plan_state_ = PlanState::INIT; // 未有定位和地图时不规划。
+    double planning_horizon_ = 1.5, replan_interval_ = 0.5; // 空间滚动视野与时间触发分离，适应低速麦轮车。
+    double last_plan_time_ = -1.; // 使用节点时钟检测周期重规划及时间回跳。
+    size_t global_progress_ = 0; // 保留全局进度，绕障时不从全局起点重新搜索。
+    bool fresh_plan_ = false; // 执行阶段只复检旧优化余段，不把旧优化结果误当新结果。
+    bool select_local_target(); // 从实测位置沿全局参考选取视野内安全目标。
+    std::vector<PathPoint> optimized_remaining(); // 截掉已走过的轨迹，再做完整碰撞检查。
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_target_pub_; // RViz可直接观察滚动目标位置。
     bool needs_replan_;  // 新增：是否需要重新规划的标志
     bool flag_ = false;
     std::vector<PathPoint> planned_traj;
